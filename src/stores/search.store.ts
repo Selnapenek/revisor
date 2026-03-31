@@ -20,6 +20,9 @@ const [includePattern, setIncludePattern] = createSignal("");
 const [excludePattern, setExcludePattern] = createSignal("");
 const [advancedFiltersOpen, setAdvancedFiltersOpen] = createSignal(false);
 
+type FileListView = "list" | "tree";
+const [fileListView, setFileListView] = createSignal<FileListView>("list");
+
 const includeMatcher = createMemo(() => createGlobMatcher(includePattern()));
 const excludeMatcher = createMemo(() => createGlobMatcher(excludePattern()));
 
@@ -138,12 +141,14 @@ export const searchStore = {
   get excludePattern() { return excludePattern(); },
   get advancedFiltersOpen() { return advancedFiltersOpen(); },
   get hasActiveGlobFilters() { return hasActiveGlobFilters(); },
+  get fileListView() { return fileListView(); },
 
   setFileFilterQuery,
   setCodeSearchQuery,
   setIncludePattern,
   setExcludePattern,
   setAdvancedFiltersOpen,
+  setFileListView,
 
   toggleAdvancedFilters() {
     setAdvancedFiltersOpen((prev) => !prev);
@@ -186,6 +191,7 @@ export const searchStore = {
     setIncludePattern("");
     setExcludePattern("");
     setAdvancedFiltersOpen(false);
+    setFileListView("list");
   },
 };
 

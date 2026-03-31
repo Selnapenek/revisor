@@ -19,6 +19,28 @@ import { Spinner } from "~/components/ui/Spinner";
 import { Badge } from "~/components/ui/Badge";
 import { relativeTime } from "~/lib/time";
 
+const SIDEBAR_MIN = 180;
+const SIDEBAR_MAX = 600;
+const SIDEBAR_DEFAULT = 260;
+const SIDEBAR_STORAGE_KEY = "revisor:sidebar-width";
+
+function readPersistedWidth(): number | null {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+    if (raw === null) return null;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) && n >= SIDEBAR_MIN && n <= SIDEBAR_MAX ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistWidth(width: number) {
+  try {
+    localStorage.setItem(SIDEBAR_STORAGE_KEY, String(width));
+  } catch { /* ignore */ }
+}
+
 export default function PRDetailPage() {
   const params = useParams<{ owner: string; repo: string; number: string }>();
   const navigate = useNavigate();
@@ -27,6 +49,34 @@ export default function PRDetailPage() {
   const prNumber = () => parseInt(params.number, 10);
   const [activeTab, setActiveTab] = createSignal<"files" | "conversations">("files");
   const [scrollToThreadId, setScrollToThreadId] = createSignal<number | null>(null);
+  const [sidebarWidth, setSidebarWidth] = createSignal(readPersistedWidth() ?? SIDEBAR_DEFAULT);
+  const [isResizing, setIsResizing] = createSignal(false);
+
+  const onResizeStart = (e: PointerEvent) => {
+    e.preventDefault();
+    const target = e.currentTarget as HTMLElement;
+    target.setPointerCapture(e.pointerId);
+    setIsResizing(true);
+
+    const startX = e.clientX;
+    const startWidth = sidebarWidth();
+
+    const onMove = (ev: PointerEvent) => {
+      const delta = ev.clientX - startX;
+      setSidebarWidth(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startWidth + delta)));
+    };
+
+    const onUp = () => {
+      target.releasePointerCapture(e.pointerId);
+      target.removeEventListener("pointermove", onMove);
+      target.removeEventListener("pointerup", onUp);
+      setIsResizing(false);
+      persistWidth(sidebarWidth());
+    };
+
+    target.addEventListener("pointermove", onMove);
+    target.addEventListener("pointerup", onUp);
+  };
 
   const conversationCount = createMemo(() => buildThreads(prDetailStore.comments).length);
 
@@ -192,7 +242,7 @@ export default function PRDetailPage() {
       >
         <div class="flex-1 flex overflow-hidden">
           {/* Left panel: tabs + file tree / conversations */}
-          <div class="w-[260px] shrink-0 border-r border-(--color-border-muted) overflow-hidden flex flex-col">
+          <div style={{ width: `${sidebarWidth()}px` }} class="shrink-0 border-r border-(--color-border-muted) overflow-hidden flex flex-col">
             {/* Tab switcher */}
             <div class="flex border-b border-(--color-border-muted) shrink-0">
               <button
@@ -235,6 +285,18 @@ export default function PRDetailPage() {
                 />
               </Show>
             </div>
+          </div>
+
+          {/* Resize handle */}
+          <div
+            class="w-[5px] shrink-0 cursor-col-resize relative group"
+            onPointerDown={onResizeStart}
+          >
+            <div
+              class={`absolute inset-y-0 left-[1px] w-[3px] rounded-full transition-colors duration-150 ${
+                isResizing() ? "bg-(--color-accent-emphasis)" : "bg-transparent group-hover:bg-(--color-accent-emphasis)"
+              }`}
+            />
           </div>
 
           {/* Diff viewer panel */}
