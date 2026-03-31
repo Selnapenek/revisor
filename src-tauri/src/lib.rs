@@ -38,6 +38,8 @@ pub fn run() {
             commands::repos::search_repos,
             commands::pull_requests::list_pull_requests,
             commands::pull_requests::get_pull_request,
+            commands::pull_requests::search_pull_requests,
+            commands::pull_requests::list_repo_labels,
             commands::pull_requests::get_rate_limit,
             commands::files::get_pr_files,
             commands::comments::get_pr_comments,

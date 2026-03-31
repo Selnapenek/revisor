@@ -9,6 +9,18 @@ export interface Label {
   color: string;
 }
 
+export interface PrUser {
+  login: string;
+  avatar_url: string;
+}
+
+export interface PrSearchFilters {
+  authors: string[];
+  labels: string[];
+  assignees: string[];
+  review_status: string | null;
+}
+
 export interface PullRequest {
   id: number;
   number: number;
@@ -32,6 +44,8 @@ export interface PullRequest {
   head_ref: string;
   base_ref: string;
   html_url: string;
+  assignees: PrUser[];
+  requested_reviewers: PrUser[];
 }
 
 export interface PrFile {

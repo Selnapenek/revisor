@@ -204,6 +204,8 @@ struct GhPullRequest {
     draft: Option<bool>,
     user: GhPrUser,
     labels: Vec<GhLabel>,
+    assignees: Option<Vec<GhPrUser>>,
+    requested_reviewers: Option<Vec<GhPrUser>>,
     created_at: String,
     updated_at: String,
     merged_at: Option<String>,
@@ -269,6 +271,69 @@ struct GhPrFile {
     patch: Option<String>,
 }
 
+/// GitHub Search API response for issues/PRs
+#[derive(Deserialize)]
+struct GhSearchResult2 {
+    items: Vec<GhSearchIssueItem>,
+    total_count: u64,
+}
+
+/// A single item from the GitHub Search Issues API (used for PR search)
+#[derive(Deserialize)]
+struct GhSearchIssueItem {
+    id: u64,
+    number: u64,
+    title: String,
+    body: Option<String>,
+    state: String,
+    draft: Option<bool>,
+    user: GhPrUser,
+    labels: Vec<GhLabel>,
+    assignees: Option<Vec<GhPrUser>>,
+    created_at: String,
+    updated_at: String,
+    pull_request: Option<GhSearchPrRef>,
+    html_url: String,
+}
+
+#[derive(Deserialize)]
+struct GhSearchPrRef {
+    merged_at: Option<String>,
+}
+
+impl From<GhSearchIssueItem> for PullRequest {
+    fn from(item: GhSearchIssueItem) -> Self {
+        let merged_at = item.pull_request.as_ref().and_then(|pr| pr.merged_at.clone());
+        Self {
+            id: item.id,
+            number: item.number,
+            title: item.title,
+            body: item.body,
+            state: if merged_at.is_some() { "closed".to_string() } else { item.state },
+            draft: item.draft.unwrap_or(false),
+            author_login: item.user.login.clone(),
+            author_avatar: item.user.avatar_url.clone(),
+            labels: item.labels.into_iter().map(|l| Label { name: l.name, color: l.color }).collect(),
+            assignees: item.assignees.unwrap_or_default().into_iter().map(|u| PrUser { login: u.login, avatar_url: u.avatar_url }).collect(),
+            requested_reviewers: Vec::new(), // Search API doesn't return this
+            created_at: item.created_at,
+            updated_at: item.updated_at,
+            merged_at,
+            // Search API doesn't return these fields — zero-fill
+            comments_count: 0,
+            review_comments_count: 0,
+            additions: 0,
+            deletions: 0,
+            changed_files: 0,
+            head_sha: String::new(),
+            base_sha: String::new(),
+            head_ref: String::new(),
+            base_ref: String::new(),
+            html_url: item.html_url,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct GhReviewComment {
     id: u64,
@@ -295,9 +360,11 @@ impl From<GhPullRequest> for PullRequest {
             body: pr.body,
             state: pr.state,
             draft: pr.draft.unwrap_or(false),
-            author_login: pr.user.login,
-            author_avatar: pr.user.avatar_url,
+            author_login: pr.user.login.clone(),
+            author_avatar: pr.user.avatar_url.clone(),
             labels: pr.labels.into_iter().map(|l| Label { name: l.name, color: l.color }).collect(),
+            assignees: pr.assignees.unwrap_or_default().into_iter().map(|u| PrUser { login: u.login, avatar_url: u.avatar_url }).collect(),
+            requested_reviewers: pr.requested_reviewers.unwrap_or_default().into_iter().map(|u| PrUser { login: u.login, avatar_url: u.avatar_url }).collect(),
             created_at: pr.created_at,
             updated_at: pr.updated_at,
             merged_at: pr.merged_at,
@@ -566,6 +633,74 @@ impl GitProvider for GithubProvider {
             owner, repo, comment_id
         );
         self.delete_request(&url).await
+    }
+
+    async fn search_pull_requests(
+        &self,
+        owner: &str,
+        repo: &str,
+        state: PrState,
+        filters: &PrSearchFilters,
+        page: u32,
+        per_page: u32,
+    ) -> Result<PaginatedResult<PullRequest>> {
+        let mut qualifiers = vec![
+            format!("is:pr"),
+            format!("repo:{}/{}", owner, repo),
+        ];
+
+        match state {
+            PrState::Open => qualifiers.push("state:open".to_string()),
+            PrState::Closed => qualifiers.push("state:closed".to_string()),
+            PrState::All => {} // no state qualifier = all
+        }
+
+        for author in &filters.authors {
+            qualifiers.push(format!("author:{}", author));
+        }
+        for label in &filters.labels {
+            qualifiers.push(format!("label:{}", label));
+        }
+        for assignee in &filters.assignees {
+            qualifiers.push(format!("assignee:{}", assignee));
+        }
+        if let Some(ref review) = filters.review_status {
+            // Handle special cases like "reviewed-by:@me", "-reviewed-by:@me", "review-requested:@me"
+            if review.contains(':') {
+                qualifiers.push(review.clone());
+            } else {
+                qualifiers.push(format!("review:{}", review));
+            }
+        }
+
+        let query = qualifiers.join("+");
+        let url = format!(
+            "https://api.github.com/search/issues?q={}&sort=updated&order=desc&per_page={}&page={}",
+            urlencoding(&query), per_page, page
+        );
+
+        let result: GhSearchResult2 = self.get(&url).await?;
+        let has_next = (page as u64 * per_page as u64) < result.total_count;
+
+        Ok(PaginatedResult {
+            items: result.items.into_iter().map(Into::into).collect(),
+            page,
+            has_next_page: has_next,
+            total_count: Some(result.total_count),
+        })
+    }
+
+    async fn list_repo_labels(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Vec<Label>> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/labels?per_page=100",
+            owner, repo
+        );
+        let (items, _): (Vec<GhLabel>, bool) = self.get_with_pagination(&url).await?;
+        Ok(items.into_iter().map(|l| Label { name: l.name, color: l.color }).collect())
     }
 
     fn rate_limit_status(&self) -> RateLimitInfo {

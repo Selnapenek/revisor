@@ -1,12 +1,13 @@
 import { createSignal, createEffect, onMount, Show, For, onCleanup } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
 import { createVirtualizer } from "@tanstack/solid-virtual";
-import { listPullRequests } from "~/api";
-import { prListStore, reposStore, uiStore } from "~/stores";
+import { listPullRequests, searchPullRequests } from "~/api";
+import { prListStore, reposStore, uiStore, prFiltersStore } from "~/stores";
 import type { PrFilter } from "~/stores/pr-list.store";
 import { PRListItem } from "~/components/pr-list/PRListItem";
 import { PRListFilters } from "~/components/pr-list/PRListFilters";
 import { PRListSearch } from "~/components/pr-list/PRListSearch";
+import { PRListAdvancedFilters } from "~/components/pr-list/PRListAdvancedFilters";
 import { Button } from "~/components/ui/Button";
 import { Spinner } from "~/components/ui/Spinner";
 
@@ -28,13 +29,22 @@ export default function PRListPage() {
     }
 
     try {
-      const result = await listPullRequests(
-        params.owner,
-        params.repo,
-        prListStore.filter,
-        pageNum,
-        30,
-      );
+      const result = prFiltersStore.hasActiveFilters
+        ? await searchPullRequests(
+            params.owner,
+            params.repo,
+            prListStore.filter,
+            prFiltersStore.activeFilters,
+            pageNum,
+            30,
+          )
+        : await listPullRequests(
+            params.owner,
+            params.repo,
+            prListStore.filter,
+            pageNum,
+            30,
+          );
 
       if (append) {
         prListStore.appendPrs(result.items);
@@ -43,6 +53,9 @@ export default function PRListPage() {
       }
       prListStore.setPage(pageNum);
       prListStore.setHasNextPage(result.has_next_page);
+
+      // Populate filter options from loaded PRs
+      prFiltersStore.updateKnownUsersFromPrs(result.items);
     } catch (err) {
       uiStore.showError(`Failed to load PRs: ${err}`);
     } finally {
@@ -51,14 +64,35 @@ export default function PRListPage() {
     }
   };
 
-  // Load PRs on mount and when filter changes
-  onMount(() => fetchPrs(1));
+  // Load PRs on mount, preload labels
+  onMount(() => {
+    fetchPrs(1);
+    prFiltersStore.fetchLabels(params.owner, params.repo);
+  });
 
+  // Cleanup filters when leaving this page
+  onCleanup(() => {
+    prFiltersStore.reset();
+  });
+
+  // Re-fetch when state filter changes
   createEffect(() => {
     const _filter = prListStore.filter;
     prListStore.reset();
     fetchPrs(1);
   });
+
+  // Re-fetch when advanced filters change (debounced)
+  let filterDebounce: ReturnType<typeof setTimeout> | undefined;
+  createEffect(() => {
+    const _filters = JSON.stringify(prFiltersStore.activeFilters);
+    clearTimeout(filterDebounce);
+    filterDebounce = setTimeout(() => {
+      prListStore.reset();
+      fetchPrs(1);
+    }, 300);
+  });
+  onCleanup(() => clearTimeout(filterDebounce));
 
   const loadMore = () => {
     if (prListStore.hasNextPage && !prListStore.isLoadingMore) {
@@ -117,6 +151,9 @@ export default function PRListPage() {
         </div>
       </div>
 
+      {/* Advanced filters */}
+      <PRListAdvancedFilters />
+
       {/* PR list */}
       <Show
         when={!prListStore.isLoading}
@@ -129,8 +166,16 @@ export default function PRListPage() {
         <Show
           when={items().length > 0}
           fallback={
-            <div class="flex-1 flex items-center justify-center text-sm text-(--color-text-muted)">
-              No pull requests found
+            <div class="flex-1 flex flex-col items-center justify-center gap-2 text-sm text-(--color-text-muted)">
+              <span>{prFiltersStore.hasActiveFilters ? "No pull requests match the active filters" : "No pull requests found"}</span>
+              <Show when={prFiltersStore.hasActiveFilters}>
+                <button
+                  class="text-xs text-(--color-accent-fg) hover:underline cursor-pointer"
+                  onClick={() => prFiltersStore.clearAll()}
+                >
+                  Clear filters
+                </button>
+              </Show>
             </div>
           }
         >
@@ -163,6 +208,7 @@ export default function PRListPage() {
                       <PRListItem
                         pr={pr()}
                         onClick={() => handlePrClick(pr().number)}
+                        isSearchMode={prFiltersStore.hasActiveFilters}
                       />
                     </div>
                   );

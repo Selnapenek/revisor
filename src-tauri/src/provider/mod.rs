@@ -97,6 +97,24 @@ pub trait GitProvider: Send + Sync {
         per_page: u32,
     ) -> Result<PaginatedResult<RepoInfo>>;
 
+    /// Search pull requests using GitHub Search API (supports advanced filters)
+    async fn search_pull_requests(
+        &self,
+        owner: &str,
+        repo: &str,
+        state: PrState,
+        filters: &PrSearchFilters,
+        page: u32,
+        per_page: u32,
+    ) -> Result<PaginatedResult<PullRequest>>;
+
+    /// List all labels for a repository
+    async fn list_repo_labels(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Vec<Label>>;
+
     /// Get current rate limit status
     fn rate_limit_status(&self) -> RateLimitInfo;
 }

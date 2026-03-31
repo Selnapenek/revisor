@@ -57,6 +57,31 @@ pub struct Label {
     pub color: String,
 }
 
+/// Lightweight user reference (for assignees, reviewers)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrUser {
+    pub login: String,
+    pub avatar_url: String,
+}
+
+/// Filters for searching pull requests via GitHub Search API
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PrSearchFilters {
+    pub authors: Vec<String>,
+    pub labels: Vec<String>,
+    pub assignees: Vec<String>,
+    pub review_status: Option<String>,
+}
+
+impl PrSearchFilters {
+    pub fn is_empty(&self) -> bool {
+        self.authors.is_empty()
+            && self.labels.is_empty()
+            && self.assignees.is_empty()
+            && self.review_status.is_none()
+    }
+}
+
 /// Pull request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PullRequest {
@@ -82,6 +107,8 @@ pub struct PullRequest {
     pub head_ref: String,
     pub base_ref: String,
     pub html_url: String,
+    pub assignees: Vec<PrUser>,
+    pub requested_reviewers: Vec<PrUser>,
 }
 
 /// File changed in a PR (metadata only — diff loaded separately)

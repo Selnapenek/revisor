@@ -4,3 +4,4 @@ export { prListStore } from "./pr-list.store";
 export { prDetailStore } from "./pr-detail.store";
 export { uiStore } from "./ui.store";
 export { searchStore } from "./search.store";
+export { prFiltersStore } from "./pr-filters.store";

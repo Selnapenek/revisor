@@ -1,4 +1,4 @@
-use crate::provider::types::{PaginatedResult, PrState, PullRequest};
+use crate::provider::types::{Label, PaginatedResult, PrSearchFilters, PrState, PullRequest};
 use crate::AppState;
 use tauri::State;
 
@@ -42,6 +42,50 @@ pub async fn get_pull_request(
 
     provider
         .get_pull_request(&owner, &repo, number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn search_pull_requests(
+    state: State<'_, AppState>,
+    owner: String,
+    repo: String,
+    pr_state: String,
+    filters: PrSearchFilters,
+    page: u32,
+    per_page: u32,
+) -> Result<PaginatedResult<PullRequest>, String> {
+    let guard = state.provider.read().await;
+    let provider = guard
+        .as_ref()
+        .ok_or_else(|| "Not authenticated".to_string())?;
+
+    let state_filter = match pr_state.as_str() {
+        "closed" => PrState::Closed,
+        "all" => PrState::All,
+        _ => PrState::Open,
+    };
+
+    provider
+        .search_pull_requests(&owner, &repo, state_filter, &filters, page, per_page)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_repo_labels(
+    state: State<'_, AppState>,
+    owner: String,
+    repo: String,
+) -> Result<Vec<Label>, String> {
+    let guard = state.provider.read().await;
+    let provider = guard
+        .as_ref()
+        .ok_or_else(|| "Not authenticated".to_string())?;
+
+    provider
+        .list_repo_labels(&owner, &repo)
         .await
         .map_err(|e| e.to_string())
 }
