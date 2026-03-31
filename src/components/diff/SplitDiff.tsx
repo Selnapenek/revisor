@@ -155,13 +155,15 @@ export function SplitDiff(props: SplitDiffProps) {
                       <div class="mx-4 my-2 flex flex-col gap-2 min-w-0 overflow-hidden">
                         <For each={rowThreads()}>
                           {(thread) => (
-                            <CommentThreadView
-                              thread={thread}
-                              currentUser={props.currentUser}
-                              onReply={props.commentActions.onReply}
-                              onUpdate={props.commentActions.onUpdate}
-                              onDelete={props.commentActions.onDelete}
-                            />
+                            <div data-comment-thread={thread.root.id}>
+                              <CommentThreadView
+                                thread={thread}
+                                currentUser={props.currentUser}
+                                onReply={props.commentActions.onReply}
+                                onUpdate={props.commentActions.onUpdate}
+                                onDelete={props.commentActions.onDelete}
+                              />
+                            </div>
                           )}
                         </For>
                       </div>

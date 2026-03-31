@@ -1,6 +1,7 @@
 import { createSignal, createMemo } from "solid-js";
 import { prDetailStore } from "./pr-detail.store";
 import { findMatchesInString } from "~/lib/search";
+import { createGlobMatcher } from "~/lib/glob";
 
 export interface SearchMatchLocation {
   filePath: string;
@@ -15,12 +16,36 @@ const [fileFilterQuery, setFileFilterQuery] = createSignal("");
 const [codeSearchQuery, setCodeSearchQuery] = createSignal("");
 const [codeSearchActive, setCodeSearchActive] = createSignal(false);
 const [activeMatchIndex, setActiveMatchIndex] = createSignal(0);
+const [includePattern, setIncludePattern] = createSignal("");
+const [excludePattern, setExcludePattern] = createSignal("");
+const [advancedFiltersOpen, setAdvancedFiltersOpen] = createSignal(false);
+
+const includeMatcher = createMemo(() => createGlobMatcher(includePattern()));
+const excludeMatcher = createMemo(() => createGlobMatcher(excludePattern()));
+
+const hasActiveGlobFilters = createMemo(
+  () => includePattern().trim() !== "" || excludePattern().trim() !== "",
+);
 
 const filteredFiles = createMemo(() => {
   const q = fileFilterQuery().toLowerCase();
   const files = prDetailStore.files;
-  if (!q) return files;
-  return files.filter((f) => f.filename.toLowerCase().includes(q));
+  const incMatcher = includeMatcher();
+  const excMatcher = excludeMatcher();
+
+  let result = files;
+
+  if (q) {
+    result = result.filter((f) => f.filename.toLowerCase().includes(q));
+  }
+  if (incMatcher) {
+    result = result.filter((f) => incMatcher(f.filename));
+  }
+  if (excMatcher) {
+    result = result.filter((f) => !excMatcher(f.filename));
+  }
+
+  return result;
 });
 
 const codeSearchResults = createMemo((): SearchMatchLocation[] => {
@@ -109,9 +134,20 @@ export const searchStore = {
   get matchesByFileAndLine() { return matchesByFileAndLine(); },
   get matchCountByFile() { return matchCountByFile(); },
   get totalMatchCount() { return codeSearchResults().length; },
+  get includePattern() { return includePattern(); },
+  get excludePattern() { return excludePattern(); },
+  get advancedFiltersOpen() { return advancedFiltersOpen(); },
+  get hasActiveGlobFilters() { return hasActiveGlobFilters(); },
 
   setFileFilterQuery,
   setCodeSearchQuery,
+  setIncludePattern,
+  setExcludePattern,
+  setAdvancedFiltersOpen,
+
+  toggleAdvancedFilters() {
+    setAdvancedFiltersOpen((prev) => !prev);
+  },
 
   openCodeSearch() {
     setCodeSearchActive(true);
@@ -147,6 +183,9 @@ export const searchStore = {
     setCodeSearchQuery("");
     setCodeSearchActive(false);
     setActiveMatchIndex(0);
+    setIncludePattern("");
+    setExcludePattern("");
+    setAdvancedFiltersOpen(false);
   },
 };
 

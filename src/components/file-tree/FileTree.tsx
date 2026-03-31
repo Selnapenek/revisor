@@ -59,7 +59,51 @@ export function FileTree(props: FileTreeProps) {
               </svg>
             </button>
           </Show>
+          {/* Advanced filter toggle */}
+          <button
+            class={`w-3.5 h-3.5 flex items-center justify-center rounded shrink-0 cursor-pointer transition-colors ${
+              searchStore.hasActiveGlobFilters
+                ? "text-(--color-accent-fg)"
+                : "text-(--color-text-muted) hover:text-(--color-text-primary)"
+            }`}
+            onClick={() => searchStore.toggleAdvancedFilters()}
+            title="Toggle file glob filters"
+          >
+            <svg class="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M.75 3h14.5a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1 0-1.5ZM3 7.75A.75.75 0 0 1 3.75 7h8.5a.75.75 0 0 1 0 1.5h-8.5A.75.75 0 0 1 3 7.75Zm3 4a.75.75 0 0 1 .75-.75h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1-.75-.75Z" />
+            </svg>
+          </button>
         </div>
+
+        {/* Advanced glob filter fields */}
+        <Show when={searchStore.advancedFiltersOpen}>
+          <div class="mt-2 flex flex-col gap-2">
+            <div>
+              <label class="block text-[10px] text-(--color-text-muted) uppercase tracking-wider mb-0.5">
+                files to include
+              </label>
+              <input
+                type="text"
+                class="w-full px-2 py-1 text-xs rounded bg-(--color-bg-tertiary) border border-(--color-border-muted) text-(--color-text-primary) placeholder:text-(--color-text-muted) outline-none focus:border-(--color-accent-emphasis) transition-colors"
+                placeholder="e.g. *.ts, src/**"
+                value={searchStore.includePattern}
+                onInput={(e) => searchStore.setIncludePattern(e.currentTarget.value)}
+              />
+            </div>
+            <div>
+              <label class="block text-[10px] text-(--color-text-muted) uppercase tracking-wider mb-0.5">
+                files to exclude
+              </label>
+              <input
+                type="text"
+                class="w-full px-2 py-1 text-xs rounded bg-(--color-bg-tertiary) border border-(--color-border-muted) text-(--color-text-primary) placeholder:text-(--color-text-muted) outline-none focus:border-(--color-accent-emphasis) transition-colors"
+                placeholder="e.g. *.test.ts, dist/**"
+                value={searchStore.excludePattern}
+                onInput={(e) => searchStore.setExcludePattern(e.currentTarget.value)}
+              />
+            </div>
+          </div>
+        </Show>
       </div>
 
       {/* Progress header */}
@@ -81,9 +125,20 @@ export function FileTree(props: FileTreeProps) {
         <Show
           when={props.files.length > 0}
           fallback={
-            <Show when={searchStore.fileFilterQuery}>
+            <Show when={searchStore.fileFilterQuery || searchStore.hasActiveGlobFilters}>
               <div class="px-3 py-4 text-xs text-(--color-text-muted) text-center">
-                No files match "{searchStore.fileFilterQuery}"
+                <p>No files match current filters</p>
+                <Show when={searchStore.hasActiveGlobFilters}>
+                  <button
+                    class="mt-2 text-[10px] text-(--color-accent-fg) hover:underline cursor-pointer"
+                    onClick={() => {
+                      searchStore.setIncludePattern("");
+                      searchStore.setExcludePattern("");
+                    }}
+                  >
+                    Clear glob filters
+                  </button>
+                </Show>
               </div>
             </Show>
           }

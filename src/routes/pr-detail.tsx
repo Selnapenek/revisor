@@ -1,4 +1,4 @@
-import { onMount, onCleanup, Show } from "solid-js";
+import { onMount, onCleanup, Show, createSignal, createMemo, createEffect } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
 import {
   getPullRequest,
@@ -10,7 +10,9 @@ import {
 } from "~/api";
 import { prDetailStore, uiStore } from "~/stores";
 import { searchStore } from "~/stores/search.store";
+import { buildThreads } from "~/lib/comments";
 import { FileTree } from "~/components/file-tree/FileTree";
+import { ConversationList } from "~/components/conversations/ConversationList";
 import { DiffViewer } from "~/components/diff/DiffViewer";
 import { Button } from "~/components/ui/Button";
 import { Spinner } from "~/components/ui/Spinner";
@@ -23,6 +25,26 @@ export default function PRDetailPage() {
   let fileFilterRef: HTMLInputElement | undefined;
 
   const prNumber = () => parseInt(params.number, 10);
+  const [activeTab, setActiveTab] = createSignal<"files" | "conversations">("files");
+  const [scrollToThreadId, setScrollToThreadId] = createSignal<number | null>(null);
+
+  const conversationCount = createMemo(() => buildThreads(prDetailStore.comments).length);
+
+  // Scroll to thread after file switch renders
+  createEffect(() => {
+    const threadId = scrollToThreadId();
+    if (threadId === null) return;
+    if (!prDetailStore.selectedFile) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-comment-thread="${threadId}"]`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          setScrollToThreadId(null);
+        }
+      });
+    });
+  });
 
   onMount(async () => {
     prDetailStore.reset();
@@ -73,6 +95,12 @@ export default function PRDetailPage() {
       fileFilterRef?.focus();
     }
 
+    // Cmd+Shift+C: toggle conversations panel
+    if (mod && e.shiftKey && e.key === "c") {
+      e.preventDefault();
+      setActiveTab((prev) => (prev === "files" ? "conversations" : "files"));
+    }
+
     // Escape: close code search
     if (e.key === "Escape" && searchStore.codeSearchActive) {
       searchStore.closeCodeSearch();
@@ -106,6 +134,11 @@ export default function PRDetailPage() {
       // Rollback on failure
       prDetailStore.toggleFileReviewed(path);
     }
+  };
+
+  const handleSelectThread = (filePath: string, threadId: number) => {
+    prDetailStore.setSelectedFilePath(filePath);
+    setScrollToThreadId(threadId);
   };
 
   const handleBack = () => {
@@ -158,15 +191,50 @@ export default function PRDetailPage() {
         }
       >
         <div class="flex-1 flex overflow-hidden">
-          {/* File tree panel */}
-          <div class="w-[260px] shrink-0 border-r border-(--color-border-muted) overflow-hidden">
-            <FileTree
-              files={searchStore.filteredFiles}
-              selectedPath={prDetailStore.selectedFilePath}
-              onSelect={handleSelectFile}
-              onToggleReviewed={handleToggleReviewed}
-              fileFilterRef={(el) => { fileFilterRef = el; }}
-            />
+          {/* Left panel: tabs + file tree / conversations */}
+          <div class="w-[260px] shrink-0 border-r border-(--color-border-muted) overflow-hidden flex flex-col">
+            {/* Tab switcher */}
+            <div class="flex border-b border-(--color-border-muted) shrink-0">
+              <button
+                class={`flex-1 px-3 py-2 text-xs font-medium cursor-pointer transition-colors border-b-2 ${
+                  activeTab() === "files"
+                    ? "border-(--color-accent-emphasis) text-(--color-text-primary)"
+                    : "border-transparent text-(--color-text-muted) hover:text-(--color-text-secondary)"
+                }`}
+                onClick={() => setActiveTab("files")}
+              >
+                Files <span class="text-(--color-text-muted)">{prDetailStore.files.length}</span>
+              </button>
+              <button
+                class={`flex-1 px-3 py-2 text-xs font-medium cursor-pointer transition-colors border-b-2 ${
+                  activeTab() === "conversations"
+                    ? "border-(--color-accent-emphasis) text-(--color-text-primary)"
+                    : "border-transparent text-(--color-text-muted) hover:text-(--color-text-secondary)"
+                }`}
+                onClick={() => setActiveTab("conversations")}
+              >
+                Conversations <span class="text-(--color-text-muted)">{conversationCount()}</span>
+              </button>
+            </div>
+
+            {/* Panel content */}
+            <div class="flex-1 overflow-hidden">
+              <Show when={activeTab() === "files"}>
+                <FileTree
+                  files={searchStore.filteredFiles}
+                  selectedPath={prDetailStore.selectedFilePath}
+                  onSelect={handleSelectFile}
+                  onToggleReviewed={handleToggleReviewed}
+                  fileFilterRef={(el) => { fileFilterRef = el; }}
+                />
+              </Show>
+              <Show when={activeTab() === "conversations"}>
+                <ConversationList
+                  onSelectThread={handleSelectThread}
+                  activeThreadId={scrollToThreadId()}
+                />
+              </Show>
+            </div>
           </div>
 
           {/* Diff viewer panel */}
