@@ -21,7 +21,23 @@ const [excludePattern, setExcludePattern] = createSignal("");
 const [advancedFiltersOpen, setAdvancedFiltersOpen] = createSignal(false);
 
 type FileListView = "list" | "tree";
-const [fileListView, setFileListView] = createSignal<FileListView>("list");
+const FILE_LIST_VIEW_KEY = "revisor:file-list-view";
+
+function readPersistedFileListView(): FileListView {
+  try {
+    const raw = localStorage.getItem(FILE_LIST_VIEW_KEY);
+    return raw === "tree" ? "tree" : "list";
+  } catch {
+    return "list";
+  }
+}
+
+const [fileListView, _setFileListView] = createSignal<FileListView>(readPersistedFileListView());
+
+function setFileListView(view: FileListView) {
+  _setFileListView(view);
+  try { localStorage.setItem(FILE_LIST_VIEW_KEY, view); } catch { /* ignore */ }
+}
 
 const includeMatcher = createMemo(() => createGlobMatcher(includePattern()));
 const excludeMatcher = createMemo(() => createGlobMatcher(excludePattern()));
@@ -191,7 +207,6 @@ export const searchStore = {
     setIncludePattern("");
     setExcludePattern("");
     setAdvancedFiltersOpen(false);
-    setFileListView("list");
   },
 };
 
