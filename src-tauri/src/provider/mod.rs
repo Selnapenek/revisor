@@ -115,6 +115,23 @@ pub trait GitProvider: Send + Sync {
         repo: &str,
     ) -> Result<Vec<Label>>;
 
+    /// List commits in a pull request
+    async fn get_pr_commits(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<Commit>>;
+
+    /// Get files changed between two refs (compare API)
+    async fn get_compare_files(
+        &self,
+        owner: &str,
+        repo: &str,
+        base: &str,
+        head: &str,
+    ) -> Result<Vec<PrFile>>;
+
     /// Get current rate limit status
     fn rate_limit_status(&self) -> RateLimitInfo;
 }

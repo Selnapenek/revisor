@@ -1,8 +1,13 @@
 import { createSignal, createMemo } from "solid-js";
-import type { PullRequest, ReviewComment } from "~/types/pr";
+import type { PullRequest, ReviewComment, Commit } from "~/types/pr";
 import type { ProcessedFile } from "~/api/files";
 
 type DiffMode = "split" | "unified";
+
+export type CommitSelection =
+  | { type: "all" }
+  | { type: "single"; index: number }
+  | { type: "range"; from: number; to: number };
 
 const [pr, setPr] = createSignal<PullRequest | null>(null);
 const [files, setFiles] = createSignal<ProcessedFile[]>([]);
@@ -12,6 +17,8 @@ const [selectedFilePath, setSelectedFilePath] = createSignal<string | null>(null
 const [diffMode, setDiffMode] = createSignal<DiffMode>("split");
 const [isLoadingFiles, setIsLoadingFiles] = createSignal(false);
 const [isLoadingComments, setIsLoadingComments] = createSignal(false);
+const [commits, setCommits] = createSignal<Commit[]>([]);
+const [commitSelection, setCommitSelection] = createSignal<CommitSelection>({ type: "all" });
 
 export const prDetailStore = {
   get pr() { return pr(); },
@@ -22,6 +29,20 @@ export const prDetailStore = {
   get diffMode() { return diffMode(); },
   get isLoadingFiles() { return isLoadingFiles(); },
   get isLoadingComments() { return isLoadingComments(); },
+  get commits() { return commits(); },
+  get commitSelection() { return commitSelection(); },
+
+  get commitSelectionLabel(): string {
+    const sel = commitSelection();
+    const list = commits();
+    if (sel.type === "all") return `All commits (${list.length})`;
+    if (sel.type === "single") {
+      const c = list[sel.index];
+      return c ? `${c.short_sha} ${c.message}` : "1 commit";
+    }
+    const count = sel.to - sel.from + 1;
+    return `${count} commits`;
+  },
 
   get selectedFile(): ProcessedFile | null {
     const path = selectedFilePath();
@@ -49,6 +70,8 @@ export const prDetailStore = {
   setDiffMode,
   setIsLoadingFiles,
   setIsLoadingComments,
+  setCommits,
+  setCommitSelection,
 
   addComment(comment: ReviewComment) {
     setComments((prev) => [...prev, comment]);
@@ -92,5 +115,7 @@ export const prDetailStore = {
     setSelectedFilePath(null);
     setIsLoadingFiles(false);
     setIsLoadingComments(false);
+    setCommits([]);
+    setCommitSelection({ type: "all" });
   },
 };

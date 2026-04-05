@@ -74,6 +74,16 @@ export interface ReviewComment {
   html_url: string;
 }
 
+export interface Commit {
+  sha: string;
+  short_sha: string;
+  message: string;
+  author_login: string;
+  author_avatar: string;
+  authored_date: string;
+  parents: string[];
+}
+
 export interface RateLimitInfo {
   remaining: number;
   limit: number;

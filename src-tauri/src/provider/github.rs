@@ -301,6 +301,57 @@ struct GhSearchPrRef {
     merged_at: Option<String>,
 }
 
+/// GitHub commit response (from PR commits endpoint)
+#[derive(Deserialize)]
+struct GhCommit {
+    sha: String,
+    commit: GhCommitDetail,
+    author: Option<GhPrUser>,
+    parents: Vec<GhCommitParent>,
+}
+
+#[derive(Deserialize)]
+struct GhCommitDetail {
+    message: String,
+    author: GhCommitAuthor,
+}
+
+#[derive(Deserialize)]
+struct GhCommitAuthor {
+    date: String,
+}
+
+#[derive(Deserialize)]
+struct GhCommitParent {
+    sha: String,
+}
+
+impl From<GhCommit> for Commit {
+    fn from(c: GhCommit) -> Self {
+        let short_sha = c.sha.chars().take(7).collect();
+        let message = c.commit.message.lines().next().unwrap_or("").to_string();
+        let (author_login, author_avatar) = match c.author {
+            Some(u) => (u.login, u.avatar_url),
+            None => ("unknown".to_string(), String::new()),
+        };
+        Self {
+            sha: c.sha,
+            short_sha,
+            message,
+            author_login,
+            author_avatar,
+            authored_date: c.commit.author.date,
+            parents: c.parents.into_iter().map(|p| p.sha).collect(),
+        }
+    }
+}
+
+/// GitHub compare API response
+#[derive(Deserialize)]
+struct GhCompareResponse {
+    files: Option<Vec<GhPrFile>>,
+}
+
 impl From<GhSearchIssueItem> for PullRequest {
     fn from(item: GhSearchIssueItem) -> Self {
         let merged_at = item.pull_request.as_ref().and_then(|pr| pr.merged_at.clone());
@@ -701,6 +752,51 @@ impl GitProvider for GithubProvider {
         );
         let (items, _): (Vec<GhLabel>, bool) = self.get_with_pagination(&url).await?;
         Ok(items.into_iter().map(|l| Label { name: l.name, color: l.color }).collect())
+    }
+
+    async fn get_pr_commits(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<Commit>> {
+        let mut all_commits = Vec::new();
+        let mut page = 1u32;
+
+        loop {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/pulls/{}/commits?per_page=100&page={}",
+                owner, repo, number, page
+            );
+
+            let (items, has_next): (Vec<GhCommit>, bool) =
+                self.get_with_pagination(&url).await?;
+
+            all_commits.extend(items.into_iter().map(Commit::from));
+
+            if !has_next {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(all_commits)
+    }
+
+    async fn get_compare_files(
+        &self,
+        owner: &str,
+        repo: &str,
+        base: &str,
+        head: &str,
+    ) -> Result<Vec<PrFile>> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/compare/{}...{}",
+            owner, repo, base, head
+        );
+
+        let result: GhCompareResponse = self.get(&url).await?;
+        Ok(result.files.unwrap_or_default().into_iter().map(Into::into).collect())
     }
 
     fn rate_limit_status(&self) -> RateLimitInfo {
