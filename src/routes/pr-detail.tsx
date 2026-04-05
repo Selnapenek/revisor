@@ -205,25 +205,24 @@ export default function PRDetailPage() {
   let allPrFiles: typeof prDetailStore.files | null = null;
 
   const handleCommitSelectionChange = async (selection: CommitSelection) => {
+    // Cache full PR files before first commit-scoped selection
+    if (!allPrFiles) {
+      allPrFiles = prDetailStore.files;
+    }
+
     prDetailStore.setCommitSelection(selection);
-    prDetailStore.setIsLoadingFiles(true);
 
     try {
+      let newFiles;
+
       if (selection.type === "all") {
-        // Restore cached full PR files, or re-fetch
         if (allPrFiles) {
-          prDetailStore.setFiles(allPrFiles);
+          newFiles = allPrFiles;
         } else {
-          const files = await getPrFiles(params.owner, params.repo, prNumber());
-          prDetailStore.setFiles(files);
-          allPrFiles = files;
+          newFiles = await getPrFiles(params.owner, params.repo, prNumber());
+          allPrFiles = newFiles;
         }
       } else {
-        // Cache current full files on first commit-scoped selection
-        if (!allPrFiles && prDetailStore.commitSelection.type === "all") {
-          allPrFiles = prDetailStore.files;
-        }
-
         const commits = prDetailStore.commits;
         let base: string;
         let head: string;
@@ -239,21 +238,19 @@ export default function PRDetailPage() {
           base = fromCommit.parents[0] ?? prDetailStore.pr!.base_sha;
         }
 
-        const files = await getCompareFiles(params.owner, params.repo, base, head);
-        prDetailStore.setFiles(files);
+        newFiles = await getCompareFiles(params.owner, params.repo, base, head);
       }
 
+      prDetailStore.setFiles(newFiles);
+
       // Auto-select first file in new set
-      const files = prDetailStore.files;
-      if (files.length > 0) {
-        prDetailStore.setSelectedFilePath(files[0].filename);
+      if (newFiles.length > 0) {
+        prDetailStore.setSelectedFilePath(newFiles[0].filename);
       } else {
         prDetailStore.setSelectedFilePath(null);
       }
     } catch (err) {
       uiStore.showError(`Failed to load commit files: ${err}`);
-    } finally {
-      prDetailStore.setIsLoadingFiles(false);
     }
   };
 
