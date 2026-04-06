@@ -166,6 +166,14 @@ export default function PRDetailPage() {
     if (e.key === "Escape" && searchStore.codeSearchActive) {
       searchStore.closeCodeSearch();
     }
+
+    // Arrow Left/Right: navigate between files
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
+      e.preventDefault();
+      prDetailStore.navigateFile(e.key === "ArrowLeft" ? -1 : 1, searchStore.filteredFiles);
+    }
   };
 
   onMount(() => document.addEventListener("keydown", handleKeyDown));
