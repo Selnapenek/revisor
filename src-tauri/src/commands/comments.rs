@@ -1,4 +1,4 @@
-use crate::provider::types::{NewComment, ReviewComment};
+use crate::provider::types::{NewComment, ReviewComment, ThreadResolutionInfo};
 use crate::AppState;
 use tauri::State;
 
@@ -94,6 +94,50 @@ pub async fn reply_to_comment(
 
     provider
         .reply_to_comment(&owner, &repo, number, comment_id, &body)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_thread_resolutions(
+    state: State<'_, AppState>,
+    owner: String,
+    repo: String,
+    number: u64,
+) -> Result<Vec<ThreadResolutionInfo>, String> {
+    let guard = state.provider.read().await;
+    let provider = guard.as_ref().ok_or("Not authenticated")?;
+
+    provider
+        .get_thread_resolutions(&owner, &repo, number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn resolve_thread(
+    state: State<'_, AppState>,
+    thread_node_id: String,
+) -> Result<(), String> {
+    let guard = state.provider.read().await;
+    let provider = guard.as_ref().ok_or("Not authenticated")?;
+
+    provider
+        .resolve_thread(&thread_node_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn unresolve_thread(
+    state: State<'_, AppState>,
+    thread_node_id: String,
+) -> Result<(), String> {
+    let guard = state.provider.read().await;
+    let provider = guard.as_ref().ok_or("Not authenticated")?;
+
+    provider
+        .unresolve_thread(&thread_node_id)
         .await
         .map_err(|e| e.to_string())
 }

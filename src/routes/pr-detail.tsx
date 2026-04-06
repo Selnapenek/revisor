@@ -5,6 +5,7 @@ import {
   getPrFiles,
   getPrComments,
   getReviewedFiles,
+  getThreadResolutions,
   markFileReviewed,
   unmarkFileReviewed,
   getPrCommits,
@@ -82,7 +83,7 @@ export default function PRDetailPage() {
     target.addEventListener("pointerup", onUp);
   };
 
-  const conversationCount = createMemo(() => buildThreads(prDetailStore.comments).length);
+  const conversationCount = createMemo(() => buildThreads(prDetailStore.comments, prDetailStore.threadResolutions).length);
 
   // Scroll to thread after file switch renders
   createEffect(() => {
@@ -109,11 +110,12 @@ export default function PRDetailPage() {
     prDetailStore.setIsLoadingComments(true);
 
     try {
-      const [pr, files, comments, reviewed, commits] = await Promise.all([
+      const [pr, files, comments, reviewed, resolutions, commits] = await Promise.all([
         getPullRequest(params.owner, params.repo, prNumber()),
         getPrFiles(params.owner, params.repo, prNumber()),
         getPrComments(params.owner, params.repo, prNumber()),
         getReviewedFiles(params.owner, params.repo, prNumber()),
+        getThreadResolutions(params.owner, params.repo, prNumber()),
         getPrCommits(params.owner, params.repo, prNumber()),
       ]);
 
@@ -121,6 +123,9 @@ export default function PRDetailPage() {
       prDetailStore.setFiles(files);
       prDetailStore.setComments(comments);
       prDetailStore.setReviewedFiles(new Set(reviewed));
+      prDetailStore.setThreadResolutions(
+        new Map(resolutions.map((r) => [r.root_comment_id, r]))
+      );
       prDetailStore.setCommits(commits);
 
       // Auto-select first file

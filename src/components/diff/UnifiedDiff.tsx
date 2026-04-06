@@ -1,6 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import type { DiffHunk, DiffLine, WordDiffPair } from "~/api/files";
-import type { ReviewComment } from "~/types/pr";
+import type { ReviewComment, ThreadResolutionInfo } from "~/types/pr";
 import type { CommentActions, NewCommentTarget } from "./DiffViewer";
 import type { SearchRange } from "~/lib/search";
 import { buildThreads, threadsByLine } from "~/lib/comments";
@@ -17,6 +17,7 @@ interface UnifiedDiffProps {
   newCommentTarget: NewCommentTarget | null;
   /** Map<"lineno:side", SearchRange[]> for the current file */
   searchMatchesByKey?: Map<string, SearchRange[]>;
+  threadResolutions?: Map<number, ThreadResolutionInfo>;
 }
 
 export function UnifiedDiff(props: UnifiedDiffProps) {
@@ -38,7 +39,7 @@ export function UnifiedDiff(props: UnifiedDiffProps) {
   });
 
   // Comment threading
-  const threads = createMemo(() => buildThreads(props.comments));
+  const threads = createMemo(() => buildThreads(props.comments, props.threadResolutions));
   const threadMap = createMemo(() => threadsByLine(threads()));
 
   const getThreadsForLine = (line: DiffLine) => {
@@ -192,6 +193,8 @@ export function UnifiedDiff(props: UnifiedDiffProps) {
                                         onReply={props.commentActions.onReply}
                                         onUpdate={props.commentActions.onUpdate}
                                         onDelete={props.commentActions.onDelete}
+                                        onResolve={props.commentActions.onResolve}
+                                        onUnresolve={props.commentActions.onUnresolve}
                                       />
                                     </div>
                                   )}

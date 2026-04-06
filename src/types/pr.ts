@@ -74,6 +74,12 @@ export interface ReviewComment {
   html_url: string;
 }
 
+export interface ThreadResolutionInfo {
+  root_comment_id: number;
+  thread_node_id: string;
+  is_resolved: boolean;
+}
+
 export interface Commit {
   sha: string;
   short_sha: string;

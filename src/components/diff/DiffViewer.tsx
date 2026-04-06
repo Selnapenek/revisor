@@ -2,7 +2,7 @@ import { Show, Switch, Match, createSignal, createMemo, createEffect } from "sol
 import type { ProcessedFile } from "~/api/files";
 import type { ReviewComment } from "~/types/pr";
 import type { SearchRange } from "~/lib/search";
-import { addComment, replyToComment, updateComment, deleteComment } from "~/api";
+import { addComment, replyToComment, updateComment, deleteComment, resolveThread, unresolveThread } from "~/api";
 import { prDetailStore, uiStore } from "~/stores";
 import { searchStore } from "~/stores/search.store";
 import { authStore } from "~/stores/auth.store";
@@ -23,6 +23,8 @@ export interface CommentActions {
   onReply: (commentId: number, body: string) => Promise<void>;
   onUpdate: (commentId: number, body: string) => Promise<void>;
   onDelete: (commentId: number) => Promise<void>;
+  onResolve: (rootCommentId: number, threadNodeId: string) => Promise<void>;
+  onUnresolve: (rootCommentId: number, threadNodeId: string) => Promise<void>;
 }
 
 export interface NewCommentTarget {
@@ -112,6 +114,26 @@ export function DiffViewer(props: DiffViewerProps) {
         prDetailStore.deleteComment(commentId);
       } catch (err) {
         uiStore.showError(`Failed to delete comment: ${err}`);
+      }
+    },
+
+    async onResolve(rootCommentId: number, threadNodeId: string) {
+      prDetailStore.setThreadResolved(rootCommentId, true);
+      try {
+        await resolveThread(threadNodeId);
+      } catch (err) {
+        prDetailStore.setThreadResolved(rootCommentId, false);
+        uiStore.showError(`Failed to resolve thread: ${err}`);
+      }
+    },
+
+    async onUnresolve(rootCommentId: number, threadNodeId: string) {
+      prDetailStore.setThreadResolved(rootCommentId, false);
+      try {
+        await unresolveThread(threadNodeId);
+      } catch (err) {
+        prDetailStore.setThreadResolved(rootCommentId, true);
+        uiStore.showError(`Failed to unresolve thread: ${err}`);
       }
     },
   };
@@ -256,6 +278,7 @@ export function DiffViewer(props: DiffViewerProps) {
                   currentUser={currentUser()}
                   newCommentTarget={newCommentTarget()}
                   searchMatchesByKey={searchMatchesByKey()}
+                  threadResolutions={prDetailStore.threadResolutions}
                 />
               </Match>
               <Match when={prDetailStore.diffMode === "unified"}>
@@ -267,6 +290,7 @@ export function DiffViewer(props: DiffViewerProps) {
                   currentUser={currentUser()}
                   newCommentTarget={newCommentTarget()}
                   searchMatchesByKey={searchMatchesByKey()}
+                  threadResolutions={prDetailStore.threadResolutions}
                 />
               </Match>
             </Switch>

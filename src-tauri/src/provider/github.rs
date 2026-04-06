@@ -129,6 +129,61 @@ impl GithubProvider {
         Ok(())
     }
 
+    /// Send a GraphQL query to the GitHub API
+    async fn graphql(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        if self.rate_limit.should_throttle() {
+            bail!(
+                "GitHub API rate limit nearly exhausted. Resets at timestamp {}.",
+                self.rate_limit.info().reset_at
+            );
+        }
+
+        let body = serde_json::json!({
+            "query": query,
+            "variables": variables,
+        });
+
+        let response = self
+            .client
+            .post("https://api.github.com/graphql")
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .json(&body)
+            .send()
+            .await
+            .context("GraphQL request failed")?;
+
+        self.rate_limit.update_from_headers(response.headers());
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            bail!("GitHub GraphQL error {}: {}", status, text);
+        }
+
+        let data: serde_json::Value = response.json().await.context("Failed to parse GraphQL response")?;
+
+        if let Some(errors) = data.get("errors") {
+            if let Some(arr) = errors.as_array() {
+                if let Some(first) = arr.first() {
+                    let msg = first
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("Unknown GraphQL error");
+                    bail!("GitHub GraphQL error: {}", msg);
+                }
+            }
+        }
+
+        data.get("data")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("GraphQL response missing 'data' field"))
+    }
+
     /// Check if response has a next page via Link header
     fn has_next_page(headers: &reqwest::header::HeaderMap) -> bool {
         headers
@@ -752,6 +807,109 @@ impl GitProvider for GithubProvider {
         );
         let (items, _): (Vec<GhLabel>, bool) = self.get_with_pagination(&url).await?;
         Ok(items.into_iter().map(|l| Label { name: l.name, color: l.color }).collect())
+    }
+
+    async fn get_thread_resolutions(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<ThreadResolutionInfo>> {
+        const QUERY: &str = r#"
+            query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+                repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $number) {
+                        reviewThreads(first: 100, after: $cursor) {
+                            pageInfo { hasNextPage endCursor }
+                            nodes {
+                                id
+                                isResolved
+                                comments(first: 1) {
+                                    nodes { databaseId }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let mut results = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        loop {
+            let variables = serde_json::json!({
+                "owner": owner,
+                "repo": repo,
+                "number": number as i64,
+                "cursor": cursor,
+            });
+
+            let data = self.graphql(QUERY, variables).await?;
+
+            let threads = &data["repository"]["pullRequest"]["reviewThreads"];
+            let nodes = threads["nodes"]
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("Invalid GraphQL response structure"))?;
+
+            for node in nodes {
+                let thread_node_id = node["id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                let is_resolved = node["isResolved"].as_bool().unwrap_or(false);
+                let root_comment_id = node["comments"]["nodes"]
+                    .as_array()
+                    .and_then(|arr| arr.first())
+                    .and_then(|c| c["databaseId"].as_u64())
+                    .unwrap_or(0);
+
+                if root_comment_id > 0 {
+                    results.push(ThreadResolutionInfo {
+                        root_comment_id,
+                        thread_node_id,
+                        is_resolved,
+                    });
+                }
+            }
+
+            let page_info = &threads["pageInfo"];
+            if page_info["hasNextPage"].as_bool().unwrap_or(false) {
+                cursor = page_info["endCursor"].as_str().map(String::from);
+            } else {
+                break;
+            }
+        }
+
+        Ok(results)
+    }
+
+    async fn resolve_thread(&self, thread_node_id: &str) -> Result<()> {
+        const MUTATION: &str = r#"
+            mutation($threadId: ID!) {
+                resolveReviewThread(input: { threadId: $threadId }) {
+                    thread { isResolved }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({ "threadId": thread_node_id });
+        self.graphql(MUTATION, variables).await?;
+        Ok(())
+    }
+
+    async fn unresolve_thread(&self, thread_node_id: &str) -> Result<()> {
+        const MUTATION: &str = r#"
+            mutation($threadId: ID!) {
+                unresolveReviewThread(input: { threadId: $threadId }) {
+                    thread { isResolved }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({ "threadId": thread_node_id });
+        self.graphql(MUTATION, variables).await?;
+        Ok(())
     }
 
     async fn get_pr_commits(

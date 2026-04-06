@@ -115,6 +115,20 @@ pub trait GitProvider: Send + Sync {
         repo: &str,
     ) -> Result<Vec<Label>>;
 
+    /// Get thread resolution status for all review threads on a PR (via GraphQL)
+    async fn get_thread_resolutions(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<ThreadResolutionInfo>>;
+
+    /// Resolve a review thread by its GraphQL node ID
+    async fn resolve_thread(&self, thread_node_id: &str) -> Result<()>;
+
+    /// Unresolve a review thread by its GraphQL node ID
+    async fn unresolve_thread(&self, thread_node_id: &str) -> Result<()>;
+
     /// List commits in a pull request
     async fn get_pr_commits(
         &self,

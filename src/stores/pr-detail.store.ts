@@ -1,5 +1,5 @@
 import { createSignal, createMemo } from "solid-js";
-import type { PullRequest, ReviewComment, Commit } from "~/types/pr";
+import type { PullRequest, ReviewComment, ThreadResolutionInfo, Commit } from "~/types/pr";
 import type { ProcessedFile } from "~/api/files";
 
 type DiffMode = "split" | "unified";
@@ -17,6 +17,7 @@ const [selectedFilePath, setSelectedFilePath] = createSignal<string | null>(null
 const [diffMode, setDiffMode] = createSignal<DiffMode>("split");
 const [isLoadingFiles, setIsLoadingFiles] = createSignal(false);
 const [isLoadingComments, setIsLoadingComments] = createSignal(false);
+const [threadResolutions, setThreadResolutions] = createSignal<Map<number, ThreadResolutionInfo>>(new Map());
 const [commits, setCommits] = createSignal<Commit[]>([]);
 const [commitSelection, setCommitSelection] = createSignal<CommitSelection>({ type: "all" });
 
@@ -29,6 +30,7 @@ export const prDetailStore = {
   get diffMode() { return diffMode(); },
   get isLoadingFiles() { return isLoadingFiles(); },
   get isLoadingComments() { return isLoadingComments(); },
+  get threadResolutions() { return threadResolutions(); },
   get commits() { return commits(); },
   get commitSelection() { return commitSelection(); },
 
@@ -70,6 +72,7 @@ export const prDetailStore = {
   setDiffMode,
   setIsLoadingFiles,
   setIsLoadingComments,
+  setThreadResolutions,
   setCommits,
   setCommitSelection,
 
@@ -107,6 +110,17 @@ export const prDetailStore = {
     return reviewedFiles().has(filePath);
   },
 
+  setThreadResolved(rootCommentId: number, isResolved: boolean) {
+    setThreadResolutions((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(rootCommentId);
+      if (existing) {
+        next.set(rootCommentId, { ...existing, is_resolved: isResolved });
+      }
+      return next;
+    });
+  },
+
   reset() {
     setPr(null);
     setFiles([]);
@@ -115,6 +129,7 @@ export const prDetailStore = {
     setSelectedFilePath(null);
     setIsLoadingFiles(false);
     setIsLoadingComments(false);
+    setThreadResolutions(new Map());
     setCommits([]);
     setCommitSelection({ type: "all" });
   },

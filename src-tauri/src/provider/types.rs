@@ -151,6 +151,14 @@ pub struct NewComment {
     pub commit_id: String,
 }
 
+/// Thread resolution info (from GraphQL API)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadResolutionInfo {
+    pub root_comment_id: u64,
+    pub thread_node_id: String,
+    pub is_resolved: bool,
+}
+
 /// Commit in a pull request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Commit {

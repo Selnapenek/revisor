@@ -1,13 +1,18 @@
-import type { ReviewComment } from "~/types/pr";
+import type { ReviewComment, ThreadResolutionInfo } from "~/types/pr";
 
 export interface CommentThread {
   root: ReviewComment;
   replies: ReviewComment[];
   line: number;
   side: "LEFT" | "RIGHT";
+  isResolved: boolean;
+  threadNodeId: string | null;
 }
 
-export function buildThreads(comments: ReviewComment[]): CommentThread[] {
+export function buildThreads(
+  comments: ReviewComment[],
+  resolutions?: Map<number, ThreadResolutionInfo>,
+): CommentThread[] {
   const byId = new Map<number, ReviewComment>();
   for (const c of comments) byId.set(c.id, c);
 
@@ -36,11 +41,14 @@ export function buildThreads(comments: ReviewComment[]): CommentThread[] {
       (a, b) => a.created_at.localeCompare(b.created_at)
     );
 
+    const resolution = resolutions?.get(root.id);
     threads.push({
       root,
       replies,
       line,
       side: (root.side === "LEFT" ? "LEFT" : "RIGHT") as "LEFT" | "RIGHT",
+      isResolved: resolution?.is_resolved ?? false,
+      threadNodeId: resolution?.thread_node_id ?? null,
     });
   }
 
