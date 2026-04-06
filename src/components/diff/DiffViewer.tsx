@@ -196,6 +196,33 @@ export function DiffViewer(props: DiffViewerProps) {
     <div class="h-full flex flex-col">
       {/* File header */}
       <div class="flex items-center gap-3 px-4 py-2 border-b border-(--color-border-muted) bg-(--color-bg-secondary) shrink-0">
+        {/* File navigation */}
+        <div class="flex items-center gap-1 shrink-0">
+          <button
+            class="w-5 h-5 flex items-center justify-center rounded text-(--color-text-muted) hover:text-(--color-text-primary) hover:bg-(--color-bg-tertiary) transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-default"
+            onClick={() => prDetailStore.navigateFile(-1, searchStore.filteredFiles)}
+            disabled={searchStore.filteredFiles.length <= 1}
+            title="Previous file (←)"
+          >
+            <svg class="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M9.78 3.22a.75.75 0 0 1 0 1.06L6.06 8l3.72 3.72a.75.75 0 1 1-1.06 1.06L4.47 8.53a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z" />
+            </svg>
+          </button>
+          <span class="text-[10px] text-(--color-text-muted) tabular-nums min-w-[3ch] text-center">
+            {prDetailStore.selectedFileIndex(searchStore.filteredFiles) + 1}/{searchStore.filteredFiles.length}
+          </span>
+          <button
+            class="w-5 h-5 flex items-center justify-center rounded text-(--color-text-muted) hover:text-(--color-text-primary) hover:bg-(--color-bg-tertiary) transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-default"
+            onClick={() => prDetailStore.navigateFile(1, searchStore.filteredFiles)}
+            disabled={searchStore.filteredFiles.length <= 1}
+            title="Next file (→)"
+          >
+            <svg class="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
+            </svg>
+          </button>
+        </div>
+
         <span class="text-sm font-mono text-(--color-text-primary) truncate flex-1">
           {props.file.filename}
         </span>

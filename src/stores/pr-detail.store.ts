@@ -110,6 +110,20 @@ export const prDetailStore = {
     return reviewedFiles().has(filePath);
   },
 
+  navigateFile(direction: 1 | -1, fileList: ProcessedFile[]) {
+    if (fileList.length === 0) return;
+    const current = selectedFilePath();
+    const idx = current ? fileList.findIndex((f) => f.filename === current) : -1;
+    const next = (idx + direction + fileList.length) % fileList.length;
+    setSelectedFilePath(fileList[next].filename);
+  },
+
+  selectedFileIndex(fileList: ProcessedFile[]): number {
+    const current = selectedFilePath();
+    if (!current) return -1;
+    return fileList.findIndex((f) => f.filename === current);
+  },
+
   setThreadResolved(rootCommentId: number, isResolved: boolean) {
     setThreadResolutions((prev) => {
       const next = new Map(prev);
