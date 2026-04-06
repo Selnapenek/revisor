@@ -35,11 +35,16 @@ export function ConversationItem(props: ConversationItemProps) {
         props.isActive
           ? "bg-(--color-bg-tertiary)"
           : "hover:bg-(--color-bg-secondary)"
-      }`}
+      } ${props.thread.isResolved ? "opacity-60" : ""}`}
       onClick={props.onClick}
     >
       {/* Row 1: Author + timestamp + reply count */}
       <div class="flex items-center gap-1.5 mb-1">
+        <Show when={props.thread.isResolved}>
+          <svg class="w-3 h-3 text-(--color-success-fg) shrink-0" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 16A8 8 0 1 1 8 0a8 8 0 0 1 0 16Zm3.78-9.72a.751.751 0 0 0-.018-1.042.751.751 0 0 0-1.042-.018L6.75 9.19 5.28 7.72a.751.751 0 0 0-1.042.018.751.751 0 0 0-.018 1.042l2 2a.75.75 0 0 0 1.06 0Z" />
+          </svg>
+        </Show>
         <img
           src={props.thread.root.author_avatar}
           alt={props.thread.root.author_login}

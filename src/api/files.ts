@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ReviewComment } from "~/types/pr";
+import type { ReviewComment, ThreadResolutionInfo } from "~/types/pr";
 
 export interface ProcessedDiff {
   hunks: DiffHunk[];
@@ -114,4 +114,20 @@ export async function deleteComment(
   commentId: number,
 ): Promise<void> {
   return invoke("delete_comment", { owner, repo, commentId });
+}
+
+export async function getThreadResolutions(
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<ThreadResolutionInfo[]> {
+  return invoke<ThreadResolutionInfo[]>("get_thread_resolutions", { owner, repo, number });
+}
+
+export async function resolveThread(threadNodeId: string): Promise<void> {
+  return invoke("resolve_thread", { threadNodeId });
+}
+
+export async function unresolveThread(threadNodeId: string): Promise<void> {
+  return invoke("unresolve_thread", { threadNodeId });
 }

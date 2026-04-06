@@ -1,6 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import type { SideBySideRow, WordDiffPair } from "~/api/files";
-import type { ReviewComment } from "~/types/pr";
+import type { ReviewComment, ThreadResolutionInfo } from "~/types/pr";
 import type { CommentActions, NewCommentTarget } from "./DiffViewer";
 import type { SearchRange } from "~/lib/search";
 import { buildThreads, threadsByLine } from "~/lib/comments";
@@ -17,6 +17,7 @@ interface SplitDiffProps {
   newCommentTarget: NewCommentTarget | null;
   /** Map<"old:N" | "new:N", SearchRange[]> for the current file */
   searchMatchesByKey?: Map<string, SearchRange[]>;
+  threadResolutions?: Map<number, ThreadResolutionInfo>;
 }
 
 export function SplitDiff(props: SplitDiffProps) {
@@ -37,7 +38,7 @@ export function SplitDiff(props: SplitDiffProps) {
   };
 
   // Comment threading
-  const threads = createMemo(() => buildThreads(props.comments));
+  const threads = createMemo(() => buildThreads(props.comments, props.threadResolutions));
   const threadMap = createMemo(() => threadsByLine(threads()));
 
   const getThreadsForRow = (row: SideBySideRow) => {
@@ -162,6 +163,8 @@ export function SplitDiff(props: SplitDiffProps) {
                                 onReply={props.commentActions.onReply}
                                 onUpdate={props.commentActions.onUpdate}
                                 onDelete={props.commentActions.onDelete}
+                                onResolve={props.commentActions.onResolve}
+                                onUnresolve={props.commentActions.onUnresolve}
                               />
                             </div>
                           )}

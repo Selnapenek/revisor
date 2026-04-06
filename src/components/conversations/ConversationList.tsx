@@ -3,6 +3,8 @@ import { prDetailStore } from "~/stores";
 import { buildThreads } from "~/lib/comments";
 import { ConversationItem } from "./ConversationItem";
 
+type ResolutionFilter = "all" | "unresolved" | "resolved";
+
 interface ConversationListProps {
   onSelectThread: (filePath: string, threadId: number) => void;
   activeThreadId: number | null;
@@ -10,9 +12,10 @@ interface ConversationListProps {
 
 export function ConversationList(props: ConversationListProps) {
   const [filterQuery, setFilterQuery] = createSignal("");
+  const [resolutionFilter, setResolutionFilter] = createSignal<ResolutionFilter>("all");
 
   const allThreads = createMemo(() => {
-    const threads = buildThreads(prDetailStore.comments);
+    const threads = buildThreads(prDetailStore.comments, prDetailStore.threadResolutions);
     return threads.sort((a, b) => {
       const aLatest =
         a.replies.length > 0
@@ -27,9 +30,17 @@ export function ConversationList(props: ConversationListProps) {
   });
 
   const filteredThreads = createMemo(() => {
+    let threads = allThreads();
+
+    // Resolution filter
+    const rf = resolutionFilter();
+    if (rf === "resolved") threads = threads.filter((t) => t.isResolved);
+    if (rf === "unresolved") threads = threads.filter((t) => !t.isResolved);
+
+    // Text filter
     const q = filterQuery().toLowerCase();
-    if (!q) return allThreads();
-    return allThreads().filter((thread) => {
+    if (!q) return threads;
+    return threads.filter((thread) => {
       const all = [thread.root, ...thread.replies];
       return all.some(
         (c) =>
@@ -38,6 +49,9 @@ export function ConversationList(props: ConversationListProps) {
       );
     });
   });
+
+  const resolvedCount = createMemo(() => allThreads().filter((t) => t.isResolved).length);
+  const unresolvedCount = createMemo(() => allThreads().length - resolvedCount());
 
   return (
     <div class="h-full flex flex-col">
@@ -71,10 +85,31 @@ export function ConversationList(props: ConversationListProps) {
         </div>
       </div>
 
+      {/* Resolution filter toggle */}
+      <div class="px-3 py-1.5 border-b border-(--color-border-muted) shrink-0">
+        <div class="flex gap-0.5 bg-(--color-bg-tertiary) rounded p-0.5">
+          {(["all", "unresolved", "resolved"] as const).map((value) => (
+            <button
+              class={`flex-1 px-2 py-0.5 text-[11px] rounded cursor-pointer transition-colors ${
+                resolutionFilter() === value
+                  ? "bg-(--color-bg-secondary) text-(--color-text-primary) shadow-sm"
+                  : "text-(--color-text-secondary) hover:text-(--color-text-primary)"
+              }`}
+              onClick={() => setResolutionFilter(value)}
+            >
+              {value === "all" ? "All" : value === "unresolved" ? "Open" : "Resolved"}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Count header */}
       <div class="px-3 py-2 border-b border-(--color-border-muted) shrink-0">
         <span class="text-xs text-(--color-text-secondary)">
-          {allThreads().length} conversation{allThreads().length !== 1 ? "s" : ""}
+          {unresolvedCount()} open
+          <Show when={resolvedCount() > 0}>
+            <span class="text-(--color-text-muted)"> · {resolvedCount()} resolved</span>
+          </Show>
         </span>
       </div>
 
@@ -83,9 +118,9 @@ export function ConversationList(props: ConversationListProps) {
         <Show
           when={filteredThreads().length > 0}
           fallback={
-            <Show when={filterQuery()}>
+            <Show when={filterQuery() || resolutionFilter() !== "all"}>
               <div class="px-3 py-4 text-xs text-(--color-text-muted) text-center">
-                No conversations match "{filterQuery()}"
+                No conversations match your filters
               </div>
             </Show>
           }
