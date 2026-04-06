@@ -1,8 +1,13 @@
 import { createSignal, createMemo } from "solid-js";
-import type { PullRequest, ReviewComment, ThreadResolutionInfo } from "~/types/pr";
+import type { PullRequest, ReviewComment, ThreadResolutionInfo, Commit } from "~/types/pr";
 import type { ProcessedFile } from "~/api/files";
 
 type DiffMode = "split" | "unified";
+
+export type CommitSelection =
+  | { type: "all" }
+  | { type: "single"; index: number }
+  | { type: "range"; from: number; to: number };
 
 const [pr, setPr] = createSignal<PullRequest | null>(null);
 const [files, setFiles] = createSignal<ProcessedFile[]>([]);
@@ -13,6 +18,8 @@ const [diffMode, setDiffMode] = createSignal<DiffMode>("split");
 const [isLoadingFiles, setIsLoadingFiles] = createSignal(false);
 const [isLoadingComments, setIsLoadingComments] = createSignal(false);
 const [threadResolutions, setThreadResolutions] = createSignal<Map<number, ThreadResolutionInfo>>(new Map());
+const [commits, setCommits] = createSignal<Commit[]>([]);
+const [commitSelection, setCommitSelection] = createSignal<CommitSelection>({ type: "all" });
 
 export const prDetailStore = {
   get pr() { return pr(); },
@@ -24,6 +31,20 @@ export const prDetailStore = {
   get isLoadingFiles() { return isLoadingFiles(); },
   get isLoadingComments() { return isLoadingComments(); },
   get threadResolutions() { return threadResolutions(); },
+  get commits() { return commits(); },
+  get commitSelection() { return commitSelection(); },
+
+  get commitSelectionLabel(): string {
+    const sel = commitSelection();
+    const list = commits();
+    if (sel.type === "all") return `All commits (${list.length})`;
+    if (sel.type === "single") {
+      const c = list[sel.index];
+      return c ? `${c.short_sha} ${c.message}` : "1 commit";
+    }
+    const count = sel.to - sel.from + 1;
+    return `${count} commits`;
+  },
 
   get selectedFile(): ProcessedFile | null {
     const path = selectedFilePath();
@@ -52,6 +73,8 @@ export const prDetailStore = {
   setIsLoadingFiles,
   setIsLoadingComments,
   setThreadResolutions,
+  setCommits,
+  setCommitSelection,
 
   addComment(comment: ReviewComment) {
     setComments((prev) => [...prev, comment]);
@@ -107,5 +130,7 @@ export const prDetailStore = {
     setIsLoadingFiles(false);
     setIsLoadingComments(false);
     setThreadResolutions(new Map());
+    setCommits([]);
+    setCommitSelection({ type: "all" });
   },
 };

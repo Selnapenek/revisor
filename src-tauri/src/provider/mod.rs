@@ -129,6 +129,23 @@ pub trait GitProvider: Send + Sync {
     /// Unresolve a review thread by its GraphQL node ID
     async fn unresolve_thread(&self, thread_node_id: &str) -> Result<()>;
 
+    /// List commits in a pull request
+    async fn get_pr_commits(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<Commit>>;
+
+    /// Get files changed between two refs (compare API)
+    async fn get_compare_files(
+        &self,
+        owner: &str,
+        repo: &str,
+        base: &str,
+        head: &str,
+    ) -> Result<Vec<PrFile>>;
+
     /// Get current rate limit status
     fn rate_limit_status(&self) -> RateLimitInfo;
 }

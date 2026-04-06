@@ -61,8 +61,12 @@ pub async fn get_pr_files(
         page += 1;
     }
 
-    // Process each file: parse patch, compute side-by-side, compute word diffs
-    let processed: Vec<ProcessedFile> = all_files
+    Ok(process_pr_files(all_files))
+}
+
+/// Process raw PR files into frontend-ready format with parsed diffs
+pub fn process_pr_files(files: Vec<PrFile>) -> Vec<ProcessedFile> {
+    files
         .into_iter()
         .map(|file| {
             let diff = file.patch.as_deref().map(|patch| {
@@ -80,7 +84,6 @@ pub async fn get_pr_files(
 
                 let sbs_rows = side_by_side::to_side_by_side(&parsed.hunks);
 
-                // Compute word-level diffs for paired removed/added lines
                 let word_diffs: Vec<WordDiffPair> = sbs_rows
                     .iter()
                     .filter(|row| !row.is_hunk_header)
@@ -122,7 +125,5 @@ pub async fn get_pr_files(
                 diff,
             }
         })
-        .collect();
-
-    Ok(processed)
+        .collect()
 }

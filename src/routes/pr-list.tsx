@@ -114,7 +114,7 @@ export default function PRListPage() {
   const virtualizer = createVirtualizer({
     get count() { return items().length; },
     getScrollElement: () => scrollRef,
-    estimateSize: () => 64,
+    estimateSize: () => 52,
     overscan: 15,
   });
 
@@ -208,7 +208,6 @@ export default function PRListPage() {
                       <PRListItem
                         pr={pr()}
                         onClick={() => handlePrClick(pr().number)}
-                        isSearchMode={prFiltersStore.hasActiveFilters}
                       />
                     </div>
                   );

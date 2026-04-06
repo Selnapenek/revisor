@@ -159,6 +159,18 @@ pub struct ThreadResolutionInfo {
     pub is_resolved: bool,
 }
 
+/// Commit in a pull request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Commit {
+    pub sha: String,
+    pub short_sha: String,
+    pub message: String,
+    pub author_login: String,
+    pub author_avatar: String,
+    pub authored_date: String,
+    pub parents: Vec<String>,
+}
+
 /// Rate limit info
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitInfo {

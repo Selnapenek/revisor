@@ -5,3 +5,4 @@ export { listPullRequests, getPullRequest, searchPullRequests, listRepoLabels, g
 export { getPrFiles, getPrComments, addComment, replyToComment, updateComment, deleteComment, getThreadResolutions, resolveThread, unresolveThread } from "./files";
 export type { ProcessedFile, ProcessedDiff, DiffHunk, DiffLine, SideBySideRow, WordDiffPair, WordDiffSpan } from "./files";
 export { getReviewedFiles, markFileReviewed, unmarkFileReviewed } from "./review";
+export { getPrCommits, getCompareFiles } from "./commits";

@@ -41,6 +41,8 @@ pub fn run() {
             commands::pull_requests::search_pull_requests,
             commands::pull_requests::list_repo_labels,
             commands::pull_requests::get_rate_limit,
+            commands::commits::get_pr_commits,
+            commands::commits::get_compare_files,
             commands::files::get_pr_files,
             commands::comments::get_pr_comments,
             commands::comments::add_comment,

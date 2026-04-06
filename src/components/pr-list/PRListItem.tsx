@@ -6,7 +6,6 @@ import { relativeTime } from "~/lib/time";
 interface PRListItemProps {
   pr: PullRequest;
   onClick: () => void;
-  isSearchMode?: boolean;
 }
 
 export function PRListItem(props: PRListItemProps) {
@@ -28,7 +27,7 @@ export function PRListItem(props: PRListItemProps) {
 
   return (
     <div
-      class="px-4 py-3 border-b border-(--color-border-muted) hover:bg-(--color-bg-secondary) cursor-pointer transition-colors"
+      class="px-4 py-2 border-b border-(--color-border-muted) hover:bg-(--color-bg-secondary) cursor-pointer transition-colors"
       onClick={props.onClick}
     >
       {/* Title row */}
@@ -44,9 +43,12 @@ export function PRListItem(props: PRListItemProps) {
         </span>
       </div>
 
-      {/* Labels row */}
-      <Show when={pr().labels.length > 0}>
-        <div class="flex items-center gap-1.5 ml-[52px] mb-1 flex-wrap">
+      {/* Meta + labels row */}
+      <div class="flex items-center gap-2 text-xs text-(--color-text-muted) flex-wrap">
+        <span>{pr().author_login}</span>
+        <span>&middot;</span>
+        <span>{relativeTime(pr().updated_at)}</span>
+        <Show when={pr().labels.length > 0}>
           <For each={pr().labels}>
             {(label) => (
               <span
@@ -61,33 +63,6 @@ export function PRListItem(props: PRListItemProps) {
               </span>
             )}
           </For>
-        </div>
-      </Show>
-
-      {/* Meta row */}
-      <div class="flex items-center gap-3 text-xs text-(--color-text-muted) ml-[52px]">
-        <span>{pr().author_login}</span>
-        <span>{relativeTime(pr().updated_at)}</span>
-
-        <Show when={!props.isSearchMode && pr().changed_files > 0}>
-          <span class="flex items-center gap-1">
-            <span>{pr().changed_files} files</span>
-          </span>
-        </Show>
-
-        <Show when={!props.isSearchMode}>
-          <span class="flex items-center gap-1.5">
-            <Show when={pr().additions > 0}>
-              <span class="text-(--color-success-fg)">+{pr().additions}</span>
-            </Show>
-            <Show when={pr().deletions > 0}>
-              <span class="text-(--color-danger-fg)">-{pr().deletions}</span>
-            </Show>
-          </span>
-        </Show>
-
-        <Show when={!props.isSearchMode && pr().review_comments_count > 0}>
-          <span class="ml-auto">{pr().review_comments_count} comments</span>
         </Show>
       </div>
     </div>

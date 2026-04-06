@@ -8,7 +8,10 @@ import {
   getThreadResolutions,
   markFileReviewed,
   unmarkFileReviewed,
+  getPrCommits,
+  getCompareFiles,
 } from "~/api";
+import type { CommitSelection } from "~/stores/pr-detail.store";
 import { prDetailStore, uiStore } from "~/stores";
 import { searchStore } from "~/stores/search.store";
 import { buildThreads } from "~/lib/comments";
@@ -19,6 +22,7 @@ import { Button } from "~/components/ui/Button";
 import { Spinner } from "~/components/ui/Spinner";
 import { Badge } from "~/components/ui/Badge";
 import { relativeTime } from "~/lib/time";
+import { CommitSelector } from "~/components/commits/CommitSelector";
 
 const SIDEBAR_MIN = 180;
 const SIDEBAR_MAX = 600;
@@ -106,12 +110,13 @@ export default function PRDetailPage() {
     prDetailStore.setIsLoadingComments(true);
 
     try {
-      const [pr, files, comments, reviewed, resolutions] = await Promise.all([
+      const [pr, files, comments, reviewed, resolutions, commits] = await Promise.all([
         getPullRequest(params.owner, params.repo, prNumber()),
         getPrFiles(params.owner, params.repo, prNumber()),
         getPrComments(params.owner, params.repo, prNumber()),
         getReviewedFiles(params.owner, params.repo, prNumber()),
         getThreadResolutions(params.owner, params.repo, prNumber()),
+        getPrCommits(params.owner, params.repo, prNumber()),
       ]);
 
       prDetailStore.setPr(pr);
@@ -121,6 +126,7 @@ export default function PRDetailPage() {
       prDetailStore.setThreadResolutions(
         new Map(resolutions.map((r) => [r.root_comment_id, r]))
       );
+      prDetailStore.setCommits(commits);
 
       // Auto-select first file
       if (files.length > 0) {
@@ -200,6 +206,59 @@ export default function PRDetailPage() {
     navigate(`/repos/${params.owner}/${params.repo}/pulls`);
   };
 
+  // Cache the full PR files so we can restore them without re-fetching
+  let allPrFiles: typeof prDetailStore.files | null = null;
+
+  const handleCommitSelectionChange = async (selection: CommitSelection) => {
+    // Cache full PR files before first commit-scoped selection
+    if (!allPrFiles) {
+      allPrFiles = prDetailStore.files;
+    }
+
+    prDetailStore.setCommitSelection(selection);
+
+    try {
+      let newFiles;
+
+      if (selection.type === "all") {
+        if (allPrFiles) {
+          newFiles = allPrFiles;
+        } else {
+          newFiles = await getPrFiles(params.owner, params.repo, prNumber());
+          allPrFiles = newFiles;
+        }
+      } else {
+        const commits = prDetailStore.commits;
+        let base: string;
+        let head: string;
+
+        if (selection.type === "single") {
+          const commit = commits[selection.index];
+          head = commit.sha;
+          base = commit.parents[0] ?? prDetailStore.pr!.base_sha;
+        } else {
+          const fromCommit = commits[selection.from];
+          const toCommit = commits[selection.to];
+          head = toCommit.sha;
+          base = fromCommit.parents[0] ?? prDetailStore.pr!.base_sha;
+        }
+
+        newFiles = await getCompareFiles(params.owner, params.repo, base, head);
+      }
+
+      prDetailStore.setFiles(newFiles);
+
+      // Auto-select first file in new set
+      if (newFiles.length > 0) {
+        prDetailStore.setSelectedFilePath(newFiles[0].filename);
+      } else {
+        prDetailStore.setSelectedFilePath(null);
+      }
+    } catch (err) {
+      uiStore.showError(`Failed to load commit files: ${err}`);
+    }
+  };
+
   return (
     <div class="h-full flex flex-col">
       {/* Header bar */}
@@ -248,6 +307,16 @@ export default function PRDetailPage() {
         <div class="flex-1 flex overflow-hidden">
           {/* Left panel: tabs + file tree / conversations */}
           <div style={{ width: `${sidebarWidth()}px` }} class="shrink-0 border-r border-(--color-border-muted) overflow-hidden flex flex-col">
+            {/* Commit selector */}
+            <Show when={prDetailStore.commits.length > 0}>
+              <CommitSelector
+                commits={prDetailStore.commits}
+                selection={prDetailStore.commitSelection}
+                label={prDetailStore.commitSelectionLabel}
+                onSelect={handleCommitSelectionChange}
+              />
+            </Show>
+
             {/* Tab switcher */}
             <div class="flex border-b border-(--color-border-muted) shrink-0">
               <button
