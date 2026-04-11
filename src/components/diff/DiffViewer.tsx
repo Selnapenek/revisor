@@ -8,7 +8,6 @@ import { searchStore } from "~/stores/search.store";
 import { authStore } from "~/stores/auth.store";
 import { UnifiedDiff } from "./UnifiedDiff";
 import { SplitDiff } from "./SplitDiff";
-import { CodeSearchBar } from "./CodeSearchBar";
 
 export interface RepoContext {
   owner: string;
@@ -36,6 +35,10 @@ interface DiffViewerProps {
   file: ProcessedFile;
   comments: ReviewComment[];
   repo: RepoContext;
+  isCollapsed: boolean;
+  onToggleCollapsed: () => void;
+  isReviewed: boolean;
+  onToggleReviewed: () => void;
 }
 
 export function DiffViewer(props: DiffViewerProps) {
@@ -193,35 +196,20 @@ export function DiffViewer(props: DiffViewerProps) {
   });
 
   return (
-    <div class="h-full flex flex-col">
-      {/* File header */}
-      <div class="flex items-center gap-3 px-4 py-2 border-b border-(--color-border-muted) bg-(--color-bg-secondary) shrink-0">
-        {/* File navigation */}
-        <div class="flex items-center gap-1 shrink-0">
-          <button
-            class="w-5 h-5 flex items-center justify-center rounded text-(--color-text-muted) hover:text-(--color-text-primary) hover:bg-(--color-bg-tertiary) transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-default"
-            onClick={() => prDetailStore.navigateFile(-1, searchStore.filteredFiles)}
-            disabled={searchStore.filteredFiles.length <= 1}
-            title="Previous file (←)"
-          >
-            <svg class="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M9.78 3.22a.75.75 0 0 1 0 1.06L6.06 8l3.72 3.72a.75.75 0 1 1-1.06 1.06L4.47 8.53a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z" />
-            </svg>
-          </button>
-          <span class="text-[10px] text-(--color-text-muted) tabular-nums min-w-[3ch] text-center">
-            {prDetailStore.selectedFileIndex(searchStore.filteredFiles) + 1}/{searchStore.filteredFiles.length}
-          </span>
-          <button
-            class="w-5 h-5 flex items-center justify-center rounded text-(--color-text-muted) hover:text-(--color-text-primary) hover:bg-(--color-bg-tertiary) transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-default"
-            onClick={() => prDetailStore.navigateFile(1, searchStore.filteredFiles)}
-            disabled={searchStore.filteredFiles.length <= 1}
-            title="Next file (→)"
-          >
-            <svg class="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
-            </svg>
-          </button>
-        </div>
+    <div data-file-section={props.file.filename} class="border-b border-(--color-border-muted)">
+      {/* Sticky file header */}
+      <div
+        class="sticky top-0 z-10 flex items-center gap-3 px-4 py-2 border-b border-(--color-border-muted) bg-(--color-bg-secondary) cursor-pointer"
+        onClick={props.onToggleCollapsed}
+      >
+        {/* Collapse chevron */}
+        <svg
+          class={`w-3.5 h-3.5 shrink-0 text-(--color-text-muted) transition-transform ${props.isCollapsed ? "-rotate-90" : ""}`}
+          viewBox="0 0 16 16"
+          fill="currentColor"
+        >
+          <path d="M12.78 6.22a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L3.22 7.28a.75.75 0 0 1 1.06-1.06L8 9.94l3.72-3.72a.75.75 0 0 1 1.06 0Z" />
+        </svg>
 
         <span class="text-sm font-mono text-(--color-text-primary) truncate flex-1">
           {props.file.filename}
@@ -236,94 +224,73 @@ export function DiffViewer(props: DiffViewerProps) {
           </Show>
         </span>
 
-        {/* Diff mode toggle */}
-        <div class="flex gap-0.5 bg-(--color-bg-tertiary) rounded p-0.5 shrink-0">
-          <button
-            class={`px-2 py-0.5 text-xs rounded cursor-pointer transition-colors ${
-              prDetailStore.diffMode === "split"
-                ? "bg-(--color-bg-secondary) text-(--color-text-primary) shadow-sm"
-                : "text-(--color-text-secondary) hover:text-(--color-text-primary)"
-            }`}
-            onClick={() => prDetailStore.setDiffMode("split")}
-          >
-            Split
-          </button>
-          <button
-            class={`px-2 py-0.5 text-xs rounded cursor-pointer transition-colors ${
-              prDetailStore.diffMode === "unified"
-                ? "bg-(--color-bg-secondary) text-(--color-text-primary) shadow-sm"
-                : "text-(--color-text-secondary) hover:text-(--color-text-primary)"
-            }`}
-            onClick={() => prDetailStore.setDiffMode("unified")}
-          >
-            Unified
-          </button>
-        </div>
+        {/* Reviewed checkbox */}
+        <label
+          class="flex items-center gap-1.5 text-xs text-(--color-text-muted) shrink-0 cursor-pointer"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            checked={props.isReviewed}
+            onChange={props.onToggleReviewed}
+            class="accent-(--color-accent-emphasis)"
+          />
+          Viewed
+        </label>
       </div>
-
-      {/* Code search bar */}
-      <Show when={searchStore.codeSearchActive}>
-        <CodeSearchBar
-          query={searchStore.codeSearchQuery}
-          onQueryChange={(q) => searchStore.setCodeSearchQuery(q)}
-          totalMatches={searchStore.totalMatchCount}
-          activeIndex={searchStore.activeMatchIndex}
-          onNext={() => searchStore.nextMatch()}
-          onPrev={() => searchStore.prevMatch()}
-          onClose={() => searchStore.closeCodeSearch()}
-        />
-      </Show>
 
       {/* Diff content */}
-      <div class="flex-1 overflow-auto">
-        <Show
-          when={props.file.diff}
-          fallback={
-            <div class="flex items-center justify-center h-full text-sm text-(--color-text-muted)">
-              No diff available
-            </div>
-          }
-        >
-          {(diff) => (
-            <Switch>
-              <Match when={diff().is_binary}>
-                <div class="flex items-center justify-center h-full text-sm text-(--color-text-muted)">
-                  Binary file — not shown
-                </div>
-              </Match>
-              <Match when={diff().is_too_large}>
-                <div class="flex items-center justify-center h-full text-sm text-(--color-text-muted)">
-                  File too large to display
-                </div>
-              </Match>
-              <Match when={prDetailStore.diffMode === "split"}>
-                <SplitDiff
-                  rows={diff().side_by_side}
-                  wordDiffs={diff().word_diffs}
-                  comments={props.comments}
-                  commentActions={commentActions}
-                  currentUser={currentUser()}
-                  newCommentTarget={newCommentTarget()}
-                  searchMatchesByKey={searchMatchesByKey()}
-                  threadResolutions={prDetailStore.threadResolutions}
-                />
-              </Match>
-              <Match when={prDetailStore.diffMode === "unified"}>
-                <UnifiedDiff
-                  hunks={diff().hunks}
-                  wordDiffs={diff().word_diffs}
-                  comments={props.comments}
-                  commentActions={commentActions}
-                  currentUser={currentUser()}
-                  newCommentTarget={newCommentTarget()}
-                  searchMatchesByKey={searchMatchesByKey()}
-                  threadResolutions={prDetailStore.threadResolutions}
-                />
-              </Match>
-            </Switch>
-          )}
-        </Show>
-      </div>
+      <Show when={!props.isCollapsed}>
+        <div>
+          <Show
+            when={props.file.diff}
+            fallback={
+              <div class="flex items-center justify-center py-8 text-sm text-(--color-text-muted)">
+                No diff available
+              </div>
+            }
+          >
+            {(diff) => (
+              <Switch>
+                <Match when={diff().is_binary}>
+                  <div class="flex items-center justify-center py-8 text-sm text-(--color-text-muted)">
+                    Binary file — not shown
+                  </div>
+                </Match>
+                <Match when={diff().is_too_large}>
+                  <div class="flex items-center justify-center py-8 text-sm text-(--color-text-muted)">
+                    File too large to display
+                  </div>
+                </Match>
+                <Match when={prDetailStore.diffMode === "split"}>
+                  <SplitDiff
+                    rows={diff().side_by_side}
+                    wordDiffs={diff().word_diffs}
+                    comments={props.comments}
+                    commentActions={commentActions}
+                    currentUser={currentUser()}
+                    newCommentTarget={newCommentTarget()}
+                    searchMatchesByKey={searchMatchesByKey()}
+                    threadResolutions={prDetailStore.threadResolutions}
+                  />
+                </Match>
+                <Match when={prDetailStore.diffMode === "unified"}>
+                  <UnifiedDiff
+                    hunks={diff().hunks}
+                    wordDiffs={diff().word_diffs}
+                    comments={props.comments}
+                    commentActions={commentActions}
+                    currentUser={currentUser()}
+                    newCommentTarget={newCommentTarget()}
+                    searchMatchesByKey={searchMatchesByKey()}
+                    threadResolutions={prDetailStore.threadResolutions}
+                  />
+                </Match>
+              </Switch>
+            )}
+          </Show>
+        </div>
+      </Show>
     </div>
   );
 }

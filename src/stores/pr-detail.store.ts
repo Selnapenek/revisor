@@ -58,6 +58,10 @@ export const prDetailStore = {
     return comments().filter((c) => c.path === path);
   },
 
+  getCommentsForFile(path: string): ReviewComment[] {
+    return comments().filter((c) => c.path === path);
+  },
+
   get reviewProgress(): { reviewed: number; total: number } {
     const total = files().length;
     const reviewed = files().filter((f) => reviewedFiles().has(f.filename)).length;

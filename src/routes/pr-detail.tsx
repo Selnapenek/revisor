@@ -1,4 +1,4 @@
-import { onMount, onCleanup, Show, createSignal, createMemo, createEffect } from "solid-js";
+import { onMount, onCleanup, Show, For, createSignal, createMemo, createEffect } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
 import {
   markFileReviewed,
@@ -14,6 +14,7 @@ import { buildThreads } from "~/lib/comments";
 import { FileTree } from "~/components/file-tree/FileTree";
 import { ConversationList } from "~/components/conversations/ConversationList";
 import { DiffViewer } from "~/components/diff/DiffViewer";
+import { CodeSearchBar } from "~/components/diff/CodeSearchBar";
 import { Button } from "~/components/ui/Button";
 import { Spinner } from "~/components/ui/Spinner";
 import { Badge } from "~/components/ui/Badge";
@@ -52,6 +53,8 @@ export default function PRDetailPage() {
   const [scrollToThreadId, setScrollToThreadId] = createSignal<number | null>(null);
   const [sidebarWidth, setSidebarWidth] = createSignal(readPersistedWidth() ?? SIDEBAR_DEFAULT);
   const [isResizing, setIsResizing] = createSignal(false);
+  const [collapsedFiles, setCollapsedFiles] = createSignal<Set<string>>(new Set());
+  let scrollContainerRef: HTMLDivElement | undefined;
 
   const onResizeStart = (e: PointerEvent) => {
     e.preventDefault();
@@ -81,11 +84,28 @@ export default function PRDetailPage() {
 
   const conversationCount = createMemo(() => buildThreads(prDetailStore.comments, prDetailStore.threadResolutions).length);
 
-  // Scroll to thread after file switch renders
+  const expandFile = (path: string) => {
+    setCollapsedFiles((prev) => {
+      if (!prev.has(path)) return prev;
+      const next = new Set(prev);
+      next.delete(path);
+      return next;
+    });
+  };
+
+  const toggleFileCollapsed = (path: string) => {
+    setCollapsedFiles((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  // Scroll to thread — expand file if collapsed, then scroll
   createEffect(() => {
     const threadId = scrollToThreadId();
     if (threadId === null) return;
-    if (!prDetailStore.selectedFile) return;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         const el = document.querySelector(`[data-comment-thread="${threadId}"]`);
@@ -95,6 +115,12 @@ export default function PRDetailPage() {
         }
       });
     });
+  });
+
+  // Expand file when search navigates into a collapsed one
+  createEffect(() => {
+    const match = searchStore.activeMatch;
+    if (match) expandFile(match.filePath);
   });
 
   onMount(async () => {
@@ -159,25 +185,69 @@ export default function PRDetailPage() {
       searchStore.closeCodeSearch();
     }
 
-    // Arrow Left/Right: navigate between files
+    // Arrow Left/Right: scroll to prev/next file
     if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
       e.preventDefault();
       prDetailStore.navigateFile(e.key === "ArrowLeft" ? -1 : 1, searchStore.filteredFiles);
+      scrollToSelectedFile();
     }
   };
 
   onMount(() => document.addEventListener("keydown", handleKeyDown));
 
+  // Sync sidebar highlight with scroll position via IntersectionObserver
+  let scrollObserver: IntersectionObserver | undefined;
+
+  createEffect(() => {
+    const files = searchStore.filteredFiles;
+    if (!scrollContainerRef || files.length === 0) return;
+
+    scrollObserver?.disconnect();
+
+    scrollObserver = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            const path = (entry.target as HTMLElement).dataset.fileSection;
+            if (path) prDetailStore.setSelectedFilePath(path);
+          }
+        }
+      },
+      {
+        root: scrollContainerRef,
+        rootMargin: "0px 0px -90% 0px",
+        threshold: 0,
+      },
+    );
+
+    requestAnimationFrame(() => {
+      const sections = scrollContainerRef?.querySelectorAll("[data-file-section]");
+      sections?.forEach((el) => scrollObserver!.observe(el));
+    });
+  });
+
   onCleanup(() => {
     document.removeEventListener("keydown", handleKeyDown);
+    scrollObserver?.disconnect();
     prDetailStore.reset();
     searchStore.reset();
   });
 
+  const scrollToSelectedFile = () => {
+    const path = prDetailStore.selectedFilePath;
+    if (!path || !scrollContainerRef) return;
+    const el = scrollContainerRef.querySelector(`[data-file-section="${CSS.escape(path)}"]`);
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   const handleSelectFile = (path: string) => {
     prDetailStore.setSelectedFilePath(path);
+    expandFile(path);
+    if (!scrollContainerRef) return;
+    const el = scrollContainerRef.querySelector(`[data-file-section="${CSS.escape(path)}"]`);
+    el?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const handleToggleReviewed = async (path: string) => {
@@ -199,6 +269,7 @@ export default function PRDetailPage() {
 
   const handleSelectThread = (filePath: string, threadId: number) => {
     prDetailStore.setSelectedFilePath(filePath);
+    expandFile(filePath);
     setScrollToThreadId(threadId);
   };
 
@@ -374,23 +445,100 @@ export default function PRDetailPage() {
           </div>
 
           {/* Diff viewer panel */}
-          <div class="flex-1 overflow-hidden">
-            <Show
-              when={prDetailStore.selectedFile}
-              fallback={
-                <div class="h-full flex items-center justify-center text-sm text-(--color-text-muted)">
-                  Select a file to review
-                </div>
-              }
-            >
-              {(file) => (
-                <DiffViewer
-                  file={file()}
-                  comments={prDetailStore.fileComments}
-                  repo={{ owner: params.owner, repo: params.repo, number: prNumber() }}
-                />
-              )}
+          <div class="flex-1 flex flex-col overflow-hidden">
+            {/* Sticky toolbar */}
+            <div class="shrink-0 flex items-center gap-3 px-4 py-1.5 border-b border-(--color-border-muted) bg-(--color-bg-secondary)">
+              <span class="text-xs text-(--color-text-muted)">
+                {searchStore.filteredFiles.length} files
+              </span>
+
+              {/* Collapse / Expand all */}
+              <div class="flex items-center gap-1 shrink-0">
+                <button
+                  class="px-1.5 py-0.5 text-xs text-(--color-text-muted) hover:text-(--color-text-primary) rounded hover:bg-(--color-bg-tertiary) transition-colors cursor-pointer"
+                  onClick={() => setCollapsedFiles(new Set(searchStore.filteredFiles.map((f) => f.filename)))}
+                  title="Collapse all files"
+                >
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M4.22 3.22a.75.75 0 0 1 1.06 0L8 5.94l2.72-2.72a.75.75 0 1 1 1.06 1.06L8.53 7.53a.75.75 0 0 1-1.06 0L4.22 4.28a.75.75 0 0 1 0-1.06Zm0 8a.75.75 0 0 1 1.06 0L8 13.94l2.72-2.72a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0l-3.25-3.25a.75.75 0 0 1 0-1.06Z" />
+                  </svg>
+                </button>
+                <button
+                  class="px-1.5 py-0.5 text-xs text-(--color-text-muted) hover:text-(--color-text-primary) rounded hover:bg-(--color-bg-tertiary) transition-colors cursor-pointer"
+                  onClick={() => setCollapsedFiles(new Set())}
+                  title="Expand all files"
+                >
+                  <svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M4.22 7.78a.75.75 0 0 1 0-1.06l3.25-3.25a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 0 1-1.06 1.06L8 5.06 5.28 7.78a.75.75 0 0 1-1.06 0Zm0 4a.75.75 0 0 1 0-1.06l3.25-3.25a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 1 1-1.06 1.06L8 9.06l-2.72 2.72a.75.75 0 0 1-1.06 0Z" />
+                  </svg>
+                </button>
+              </div>
+
+              <div class="flex-1" />
+
+              {/* Diff mode toggle */}
+              <div class="flex gap-0.5 bg-(--color-bg-tertiary) rounded p-0.5 shrink-0">
+                <button
+                  class={`px-2 py-0.5 text-xs rounded cursor-pointer transition-colors ${
+                    prDetailStore.diffMode === "split"
+                      ? "bg-(--color-bg-secondary) text-(--color-text-primary) shadow-sm"
+                      : "text-(--color-text-secondary) hover:text-(--color-text-primary)"
+                  }`}
+                  onClick={() => prDetailStore.setDiffMode("split")}
+                >
+                  Split
+                </button>
+                <button
+                  class={`px-2 py-0.5 text-xs rounded cursor-pointer transition-colors ${
+                    prDetailStore.diffMode === "unified"
+                      ? "bg-(--color-bg-secondary) text-(--color-text-primary) shadow-sm"
+                      : "text-(--color-text-secondary) hover:text-(--color-text-primary)"
+                  }`}
+                  onClick={() => prDetailStore.setDiffMode("unified")}
+                >
+                  Unified
+                </button>
+              </div>
+            </div>
+
+            {/* Code search bar */}
+            <Show when={searchStore.codeSearchActive}>
+              <CodeSearchBar
+                query={searchStore.codeSearchQuery}
+                onQueryChange={(q) => searchStore.setCodeSearchQuery(q)}
+                totalMatches={searchStore.totalMatchCount}
+                activeIndex={searchStore.activeMatchIndex}
+                onNext={() => searchStore.nextMatch()}
+                onPrev={() => searchStore.prevMatch()}
+                onClose={() => searchStore.closeCodeSearch()}
+              />
             </Show>
+
+            {/* Scrollable multi-file container */}
+            <div ref={scrollContainerRef} class="flex-1 overflow-auto">
+              <Show
+                when={searchStore.filteredFiles.length > 0}
+                fallback={
+                  <div class="h-full flex items-center justify-center text-sm text-(--color-text-muted)">
+                    No files to review
+                  </div>
+                }
+              >
+                <For each={searchStore.filteredFiles}>
+                  {(file) => (
+                    <DiffViewer
+                      file={file}
+                      comments={prDetailStore.getCommentsForFile(file.filename)}
+                      repo={{ owner: params.owner, repo: params.repo, number: prNumber() }}
+                      isCollapsed={collapsedFiles().has(file.filename)}
+                      onToggleCollapsed={() => toggleFileCollapsed(file.filename)}
+                      isReviewed={prDetailStore.isFileReviewed(file.filename)}
+                      onToggleReviewed={() => handleToggleReviewed(file.filename)}
+                    />
+                  )}
+                </For>
+              </Show>
+            </div>
           </div>
         </div>
       </Show>
