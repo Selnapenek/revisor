@@ -1,10 +1,11 @@
-import { createSignal, createEffect, onMount, Show, For, onCleanup } from "solid-js";
+import { createEffect, createSignal, onMount, Show, For, onCleanup } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import { listPullRequests, searchPullRequests } from "~/api";
 import { prListStore, reposStore, uiStore, prFiltersStore } from "~/stores";
 import type { PrFilter } from "~/stores/pr-list.store";
 import { PRListItem } from "~/components/pr-list/PRListItem";
+import { prefetch, cancelPrefetch } from "~/lib/prefetch-cache";
 import { PRListFilters } from "~/components/pr-list/PRListFilters";
 import { PRListSearch } from "~/components/pr-list/PRListSearch";
 import { PRListAdvancedFilters } from "~/components/pr-list/PRListAdvancedFilters";
@@ -16,14 +17,18 @@ export default function PRListPage() {
   const navigate = useNavigate();
   let scrollRef!: HTMLDivElement;
 
-  // Set current repo from URL params
-  onMount(() => {
-    reposStore.setCurrentRepo({ owner: params.owner, repo: params.repo });
-  });
+  const currentKey = `${params.owner}/${params.repo}`;
+  const hasCachedData = prListStore.repoKey === currentKey && prListStore.prs.length > 0;
 
-  const fetchPrs = async (pageNum: number, append = false) => {
+  const [showLoader, setShowLoader] = createSignal(!hasCachedData);
+  const [isRefreshing, setIsRefreshing] = createSignal(false);
+
+  let initialized = false;
+
+  const fetchPrs = async (pageNum: number, append = false, silent = false) => {
     if (!append) {
-      prListStore.setIsLoading(true);
+      if (!silent) setShowLoader(true);
+      else setIsRefreshing(true);
     } else {
       prListStore.setIsLoadingMore(true);
     }
@@ -54,45 +59,55 @@ export default function PRListPage() {
       prListStore.setPage(pageNum);
       prListStore.setHasNextPage(result.has_next_page);
 
-      // Populate filter options from loaded PRs
       prFiltersStore.updateKnownUsersFromPrs(result.items);
     } catch (err) {
       uiStore.showError(`Failed to load PRs: ${err}`);
     } finally {
-      prListStore.setIsLoading(false);
+      setShowLoader(false);
+      setIsRefreshing(false);
       prListStore.setIsLoadingMore(false);
     }
   };
 
-  // Load PRs on mount, preload labels
   onMount(() => {
-    fetchPrs(1);
+    reposStore.setCurrentRepo({ owner: params.owner, repo: params.repo });
+
+    prListStore.setRepoKey(currentKey);
+
+    if (hasCachedData) {
+      fetchPrs(1, false, true);
+    } else {
+      prListStore.clearAll();
+      fetchPrs(1);
+    }
+
     prFiltersStore.fetchLabels(params.owner, params.repo);
+    initialized = true;
   });
 
-  // Cleanup filters when leaving this page
+  let alive = true;
   onCleanup(() => {
+    alive = false;
     prFiltersStore.reset();
+    clearTimeout(filterDebounce);
   });
 
-  // Re-fetch when state filter changes
   createEffect(() => {
     const _filter = prListStore.filter;
-    prListStore.reset();
+    if (!initialized) return;
     fetchPrs(1);
   });
 
-  // Re-fetch when advanced filters change (debounced)
   let filterDebounce: ReturnType<typeof setTimeout> | undefined;
   createEffect(() => {
     const _filters = JSON.stringify(prFiltersStore.activeFilters);
+    if (!initialized) return;
     clearTimeout(filterDebounce);
     filterDebounce = setTimeout(() => {
-      prListStore.reset();
+      if (!alive) return;
       fetchPrs(1);
     }, 300);
   });
-  onCleanup(() => clearTimeout(filterDebounce));
 
   const loadMore = () => {
     if (prListStore.hasNextPage && !prListStore.isLoadingMore) {
@@ -106,6 +121,10 @@ export default function PRListPage() {
 
   const handlePrClick = (number: number) => {
     navigate(`/repos/${params.owner}/${params.repo}/pulls/${number}`);
+  };
+
+  const handlePrHover = (number: number) => {
+    prefetch(params.owner, params.repo, number);
   };
 
   // Virtual scrolling
@@ -155,75 +174,82 @@ export default function PRListPage() {
       <PRListAdvancedFilters />
 
       {/* PR list */}
-      <Show
-        when={!prListStore.isLoading}
-        fallback={
-          <div class="flex-1 flex items-center justify-center">
+      <div class="flex-1 relative overflow-hidden">
+        {/* Spinner overlay — only when loading with no data */}
+        <Show when={showLoader() && items().length === 0}>
+          <div class="absolute inset-0 flex items-center justify-center bg-(--color-bg-primary) z-10">
             <Spinner size={24} class="text-(--color-text-muted)" />
           </div>
-        }
-      >
-        <Show
-          when={items().length > 0}
-          fallback={
-            <div class="flex-1 flex flex-col items-center justify-center gap-2 text-sm text-(--color-text-muted)">
-              <span>{prFiltersStore.hasActiveFilters ? "No pull requests match the active filters" : "No pull requests found"}</span>
-              <Show when={prFiltersStore.hasActiveFilters}>
-                <button
-                  class="text-xs text-(--color-accent-fg) hover:underline cursor-pointer"
-                  onClick={() => prFiltersStore.clearAll()}
-                >
-                  Clear filters
-                </button>
-              </Show>
-            </div>
-          }
-        >
-          <div
-            ref={scrollRef!}
-            class="flex-1 overflow-auto"
-            onScroll={handleScroll}
-          >
-            <div
-              style={{
-                height: `${virtualizer.getTotalSize()}px`,
-                position: "relative",
-              }}
-            >
-              <For each={virtualizer.getVirtualItems()}>
-                {(virtualRow) => {
-                  const pr = () => items()[virtualRow.index];
-                  return (
-                    <div
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        transform: `translateY(${virtualRow.start}px)`,
-                      }}
-                      data-index={virtualRow.index}
-                      ref={(el) => virtualizer.measureElement(el)}
-                    >
-                      <PRListItem
-                        pr={pr()}
-                        onClick={() => handlePrClick(pr().number)}
-                      />
-                    </div>
-                  );
-                }}
-              </For>
-            </div>
+        </Show>
 
-            {/* Load more indicator */}
-            <Show when={prListStore.isLoadingMore}>
-              <div class="flex justify-center py-4">
-                <Spinner size={18} class="text-(--color-text-muted)" />
-              </div>
+        {/* Empty state */}
+        <Show when={!showLoader() && items().length === 0}>
+          <div class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-(--color-text-muted)">
+            <span>{prFiltersStore.hasActiveFilters ? "No pull requests match the active filters" : "No pull requests found"}</span>
+            <Show when={prFiltersStore.hasActiveFilters}>
+              <button
+                class="text-xs text-(--color-accent-fg) hover:underline cursor-pointer"
+                onClick={() => prFiltersStore.clearAll()}
+              >
+                Clear filters
+              </button>
             </Show>
           </div>
         </Show>
-      </Show>
+
+        {/* Scroll container — always in DOM so virtualizer keeps its ref */}
+        <div
+          ref={scrollRef!}
+          class="h-full overflow-auto"
+          onScroll={handleScroll}
+          onMouseLeave={cancelPrefetch}
+        >
+          <Show when={isRefreshing()}>
+            <div class="flex items-center justify-center gap-2 px-4 py-1.5 text-xs text-(--color-text-muted)">
+              <Spinner size={12} class="text-(--color-text-muted)" />
+              <span>Refreshing…</span>
+            </div>
+          </Show>
+
+          <div
+            style={{
+              height: `${virtualizer.getTotalSize()}px`,
+              position: "relative",
+            }}
+          >
+            <For each={virtualizer.getVirtualItems()}>
+              {(virtualRow) => {
+                const pr = () => items()[virtualRow.index];
+                return (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      transform: `translateY(${virtualRow.start}px)`,
+                    }}
+                    data-index={virtualRow.index}
+                    ref={(el) => virtualizer.measureElement(el)}
+                  >
+                    <PRListItem
+                      pr={pr()}
+                      onClick={() => handlePrClick(pr().number)}
+                      onHover={() => handlePrHover(pr().number)}
+                    />
+                  </div>
+                );
+              }}
+            </For>
+          </div>
+
+          <Show when={prListStore.isLoadingMore}>
+            <div class="flex justify-center py-4">
+              <Spinner size={18} class="text-(--color-text-muted)" />
+            </div>
+          </Show>
+        </div>
+      </div>
     </div>
   );
 }

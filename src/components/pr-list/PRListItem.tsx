@@ -6,6 +6,7 @@ import { relativeTime } from "~/lib/time";
 interface PRListItemProps {
   pr: PullRequest;
   onClick: () => void;
+  onHover?: () => void;
 }
 
 export function PRListItem(props: PRListItemProps) {
@@ -29,6 +30,7 @@ export function PRListItem(props: PRListItemProps) {
     <div
       class="px-4 py-2 border-b border-(--color-border-muted) hover:bg-(--color-bg-secondary) cursor-pointer transition-colors"
       onClick={props.onClick}
+      onMouseEnter={props.onHover}
     >
       {/* Title row */}
       <div class="flex items-start gap-2 mb-1">

@@ -1,16 +1,12 @@
 import { onMount, onCleanup, Show, createSignal, createMemo, createEffect } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
 import {
-  getPullRequest,
-  getPrFiles,
-  getPrComments,
-  getReviewedFiles,
-  getThreadResolutions,
   markFileReviewed,
   unmarkFileReviewed,
-  getPrCommits,
+  getPrFiles,
   getCompareFiles,
 } from "~/api";
+import { consumePrefetch, fetchPrDetail } from "~/lib/prefetch-cache";
 import type { CommitSelection } from "~/stores/pr-detail.store";
 import { prDetailStore, uiStore } from "~/stores";
 import { searchStore } from "~/stores/search.store";
@@ -110,14 +106,10 @@ export default function PRDetailPage() {
     prDetailStore.setIsLoadingComments(true);
 
     try {
-      const [pr, files, comments, reviewed, resolutions, commits] = await Promise.all([
-        getPullRequest(params.owner, params.repo, prNumber()),
-        getPrFiles(params.owner, params.repo, prNumber()),
-        getPrComments(params.owner, params.repo, prNumber()),
-        getReviewedFiles(params.owner, params.repo, prNumber()),
-        getThreadResolutions(params.owner, params.repo, prNumber()),
-        getPrCommits(params.owner, params.repo, prNumber()),
-      ]);
+      const { pr, files, comments, reviewed, resolutions, commits } = await (
+        consumePrefetch(params.owner, params.repo, prNumber())
+        ?? fetchPrDetail(params.owner, params.repo, prNumber())
+      );
 
       prDetailStore.setPr(pr);
       prDetailStore.setFiles(files);

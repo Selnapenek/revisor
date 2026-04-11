@@ -8,8 +8,8 @@ const [filter, setFilter] = createSignal<PrFilter>("open");
 const [searchQuery, setSearchQuery] = createSignal("");
 const [page, setPage] = createSignal(1);
 const [hasNextPage, setHasNextPage] = createSignal(false);
-const [isLoading, setIsLoading] = createSignal(false);
 const [isLoadingMore, setIsLoadingMore] = createSignal(false);
+const [repoKey, setRepoKey] = createSignal("");
 
 export const prListStore = {
   get prs() { return prs(); },
@@ -17,8 +17,8 @@ export const prListStore = {
   get searchQuery() { return searchQuery(); },
   get page() { return page(); },
   get hasNextPage() { return hasNextPage(); },
-  get isLoading() { return isLoading(); },
   get isLoadingMore() { return isLoadingMore(); },
+  get repoKey() { return repoKey(); },
 
   get filteredPrs() {
     const q = searchQuery().toLowerCase();
@@ -36,14 +36,14 @@ export const prListStore = {
   setSearchQuery,
   setPage,
   setHasNextPage,
-  setIsLoading,
   setIsLoadingMore,
+  setRepoKey,
 
   appendPrs(newPrs: PullRequest[]) {
     setPrs((prev) => [...prev, ...newPrs]);
   },
 
-  reset() {
+  clearAll() {
     setPrs([]);
     setPage(1);
     setHasNextPage(false);
