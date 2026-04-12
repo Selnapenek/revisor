@@ -107,6 +107,34 @@ impl GithubProvider {
         response.json::<T>().await.context("Failed to parse response")
     }
 
+    /// GET request that returns raw text (used for fetching file content)
+    async fn get_raw(&self, url: &str) -> Result<String> {
+        if self.rate_limit.should_throttle() {
+            bail!("GitHub API rate limit nearly exhausted. Resets at timestamp {}.",
+                  self.rate_limit.info().reset_at);
+        }
+
+        let response = self
+            .client
+            .get(url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github.raw+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await
+            .context("Network request failed")?;
+
+        self.rate_limit.update_from_headers(response.headers());
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("GitHub API error {}: {}", status, body);
+        }
+
+        response.text().await.context("Failed to read response body")
+    }
+
     async fn delete_request(&self, url: &str) -> Result<()> {
         let response = self
             .client
@@ -518,6 +546,7 @@ impl From<GhReviewComment> for ReviewComment {
             in_reply_to_id: c.in_reply_to_id,
             review_id: c.pull_request_review_id,
             html_url: c.html_url,
+            outdated: c.line.is_none() && c.original_line.is_some(),
         }
     }
 }
@@ -955,6 +984,20 @@ impl GitProvider for GithubProvider {
 
         let result: GhCompareResponse = self.get(&url).await?;
         Ok(result.files.unwrap_or_default().into_iter().map(Into::into).collect())
+    }
+
+    async fn get_file_content(
+        &self,
+        owner: &str,
+        repo: &str,
+        path: &str,
+        ref_: &str,
+    ) -> Result<String> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
+            owner, repo, path, ref_
+        );
+        self.get_raw(&url).await
     }
 
     fn rate_limit_status(&self) -> RateLimitInfo {

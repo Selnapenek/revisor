@@ -1,12 +1,18 @@
 import { Show, Switch, Match, createSignal, createMemo, createEffect } from "solid-js";
-import type { ProcessedFile } from "~/api/files";
+import type { ProcessedFile, DiffHunk } from "~/api/files";
 import type { ReviewComment } from "~/types/pr";
 import type { SearchRange } from "~/lib/search";
+import {
+  computeGaps, expandUp, expandDown, expandBetween,
+  expandAllBefore, expandAllAfter, toSideBySide,
+  type ExpandableGap,
+} from "~/lib/expand-context";
 import { addComment, replyToComment, updateComment, deleteComment, resolveThread, unresolveThread } from "~/api";
 import { prDetailStore, uiStore } from "~/stores";
 import { searchStore } from "~/stores/search.store";
 import { authStore } from "~/stores/auth.store";
 import { UnifiedDiff } from "./UnifiedDiff";
+import type { ExpandCallbacks } from "./UnifiedDiff";
 import { SplitDiff } from "./SplitDiff";
 
 export interface RepoContext {
@@ -141,6 +147,81 @@ export function DiffViewer(props: DiffViewerProps) {
     },
   };
 
+  // --- Context expansion ---
+  const [expandedHunks, setExpandedHunks] = createSignal<DiffHunk[] | null>(null);
+  const [fileLines, setFileLines] = createSignal<string[] | null>(null);
+  const [expandLoading, setExpandLoading] = createSignal(false);
+
+  // Reset expanded state when file changes
+  createEffect(() => {
+    props.file.filename; // track
+    setExpandedHunks(null);
+    setFileLines(null);
+  });
+
+  const currentHunks = () => expandedHunks() ?? props.file.diff?.hunks ?? [];
+  const currentSbs = createMemo(() => {
+    const eh = expandedHunks();
+    if (eh) return toSideBySide(eh);
+    return props.file.diff?.side_by_side ?? [];
+  });
+
+  const gaps = createMemo(() => {
+    const hunks = currentHunks();
+    if (hunks.length === 0) return [];
+    const lines = fileLines();
+    return computeGaps(hunks, lines ? lines.length : null);
+  });
+
+  const ensureFileLines = async (): Promise<string[] | null> => {
+    const existing = fileLines();
+    if (existing) return existing;
+
+    const pr = prDetailStore.pr;
+    if (!pr) return null;
+
+    setExpandLoading(true);
+    try {
+      // Use head_sha for most files, base_sha for deleted files
+      const ref = props.file.status === "removed" ? pr.base_sha : pr.head_sha;
+      const lines = await prDetailStore.fetchFileLines(
+        props.repo.owner, props.repo.repo, props.file.filename, ref,
+      );
+      setFileLines(lines);
+      return lines;
+    } catch (err) {
+      uiStore.showError(`Failed to fetch file content: ${err}`);
+      return null;
+    } finally {
+      setExpandLoading(false);
+    }
+  };
+
+  const expandCallbacks: ExpandCallbacks = {
+    async onExpandUp(hunkIndex: number) {
+      const lines = await ensureFileLines();
+      if (!lines) return;
+      setExpandedHunks(expandUp(currentHunks(), hunkIndex, lines));
+    },
+    async onExpandDown(hunkIndex: number) {
+      const lines = await ensureFileLines();
+      if (!lines) return;
+      setExpandedHunks(expandDown(currentHunks(), hunkIndex, lines));
+    },
+    async onExpandAll(gap: ExpandableGap) {
+      const lines = await ensureFileLines();
+      if (!lines) return;
+      const hunks = currentHunks();
+      if (gap.position === "before") {
+        setExpandedHunks(expandAllBefore(hunks, lines));
+      } else if (gap.position === "after") {
+        setExpandedHunks(expandAllAfter(hunks, lines));
+      } else {
+        setExpandedHunks(expandBetween(hunks, gap.hunkIndex, lines));
+      }
+    },
+  };
+
   /**
    * Convert search store's hunkIdx:lineIdx keyed matches into a lineno-keyed map
    * that diff components can look up efficiently.
@@ -264,7 +345,8 @@ export function DiffViewer(props: DiffViewerProps) {
                 </Match>
                 <Match when={prDetailStore.diffMode === "split"}>
                   <SplitDiff
-                    rows={diff().side_by_side}
+                    rows={currentSbs()}
+                    hunks={currentHunks()}
                     wordDiffs={diff().word_diffs}
                     comments={props.comments}
                     commentActions={commentActions}
@@ -272,11 +354,14 @@ export function DiffViewer(props: DiffViewerProps) {
                     newCommentTarget={newCommentTarget()}
                     searchMatchesByKey={searchMatchesByKey()}
                     threadResolutions={prDetailStore.threadResolutions}
+                    gaps={gaps()}
+                    expandCallbacks={expandCallbacks}
+                    expandLoading={expandLoading()}
                   />
                 </Match>
                 <Match when={prDetailStore.diffMode === "unified"}>
                   <UnifiedDiff
-                    hunks={diff().hunks}
+                    hunks={currentHunks()}
                     wordDiffs={diff().word_diffs}
                     comments={props.comments}
                     commentActions={commentActions}
@@ -284,6 +369,9 @@ export function DiffViewer(props: DiffViewerProps) {
                     newCommentTarget={newCommentTarget()}
                     searchMatchesByKey={searchMatchesByKey()}
                     threadResolutions={prDetailStore.threadResolutions}
+                    gaps={gaps()}
+                    expandCallbacks={expandCallbacks}
+                    expandLoading={expandLoading()}
                   />
                 </Match>
               </Switch>

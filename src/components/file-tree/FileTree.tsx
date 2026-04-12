@@ -10,6 +10,7 @@ function useFileCommentCounts() {
     const counts = new Map<string, number>();
     for (const c of prDetailStore.comments) {
       if (c.in_reply_to_id !== null) continue; // only count thread roots
+      if (c.outdated) continue;
       counts.set(c.path, (counts.get(c.path) ?? 0) + 1);
     }
     return counts;

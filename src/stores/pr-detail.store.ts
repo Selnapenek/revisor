@@ -1,6 +1,8 @@
 import { createSignal, createMemo } from "solid-js";
 import type { PullRequest, ReviewComment, ThreadResolutionInfo, Commit } from "~/types/pr";
-import type { ProcessedFile } from "~/api/files";
+import type { ProcessedFile, DiffHunk, SideBySideRow } from "~/api/files";
+import { getFileContent } from "~/api/files";
+import { toSideBySide } from "~/lib/expand-context";
 
 type DiffMode = "split" | "unified";
 
@@ -20,6 +22,11 @@ const [isLoadingComments, setIsLoadingComments] = createSignal(false);
 const [threadResolutions, setThreadResolutions] = createSignal<Map<number, ThreadResolutionInfo>>(new Map());
 const [commits, setCommits] = createSignal<Commit[]>([]);
 const [commitSelection, setCommitSelection] = createSignal<CommitSelection>({ type: "all" });
+
+// In-memory cache for fetched file blobs (keyed by "owner/repo/path@ref")
+const fileLinesCache = new Map<string, string[]>();
+// Track inflight fetches to avoid duplicate requests
+const fileLinesInflight = new Map<string, Promise<string[]>>();
 
 export const prDetailStore = {
   get pr() { return pr(); },
@@ -139,6 +146,44 @@ export const prDetailStore = {
     });
   },
 
+  /** Fetch file lines from GitHub (cached in memory). Returns the lines array. */
+  async fetchFileLines(owner: string, repo: string, path: string, ref_: string): Promise<string[]> {
+    const key = `${owner}/${repo}/${path}@${ref_}`;
+
+    const cached = fileLinesCache.get(key);
+    if (cached) return cached;
+
+    // Deduplicate inflight requests
+    const inflight = fileLinesInflight.get(key);
+    if (inflight) return inflight;
+
+    const promise = getFileContent(owner, repo, path, ref_).then((lines) => {
+      fileLinesCache.set(key, lines);
+      fileLinesInflight.delete(key);
+      return lines;
+    });
+    fileLinesInflight.set(key, promise);
+    return promise;
+  },
+
+  /** Replace hunks + side_by_side for a specific file after context expansion */
+  updateFileDiff(filename: string, newHunks: DiffHunk[]) {
+    const newSbs = toSideBySide(newHunks);
+    setFiles((prev) =>
+      prev.map((f) => {
+        if (f.filename !== filename || !f.diff) return f;
+        return {
+          ...f,
+          diff: {
+            ...f.diff,
+            hunks: newHunks,
+            side_by_side: newSbs,
+          },
+        };
+      })
+    );
+  },
+
   reset() {
     setPr(null);
     setFiles([]);
@@ -150,5 +195,7 @@ export const prDetailStore = {
     setThreadResolutions(new Map());
     setCommits([]);
     setCommitSelection({ type: "all" });
+    fileLinesCache.clear();
+    fileLinesInflight.clear();
   },
 };

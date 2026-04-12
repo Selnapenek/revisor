@@ -139,6 +139,7 @@ pub struct ReviewComment {
     pub in_reply_to_id: Option<u64>,
     pub review_id: Option<u64>,
     pub html_url: String,
+    pub outdated: bool,
 }
 
 /// Parameters for creating a new comment

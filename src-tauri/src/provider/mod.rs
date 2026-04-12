@@ -146,6 +146,15 @@ pub trait GitProvider: Send + Sync {
         head: &str,
     ) -> Result<Vec<PrFile>>;
 
+    /// Get raw file content at a specific ref
+    async fn get_file_content(
+        &self,
+        owner: &str,
+        repo: &str,
+        path: &str,
+        ref_: &str,
+    ) -> Result<String>;
+
     /// Get current rate limit status
     fn rate_limit_status(&self) -> RateLimitInfo;
 }

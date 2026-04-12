@@ -3,10 +3,18 @@ import type { DiffHunk, DiffLine, WordDiffPair } from "~/api/files";
 import type { ReviewComment, ThreadResolutionInfo } from "~/types/pr";
 import type { CommentActions, NewCommentTarget } from "./DiffViewer";
 import type { SearchRange } from "~/lib/search";
+import type { ExpandableGap } from "~/lib/expand-context";
 import { buildThreads, threadsByLine } from "~/lib/comments";
 import { CommentThreadView } from "~/components/comments/CommentThread";
 import { CommentForm } from "~/components/comments/CommentForm";
 import { DiffLineContent } from "./DiffLineContent";
+import { ExpandContextRow } from "./ExpandContextRow";
+
+export interface ExpandCallbacks {
+  onExpandUp: (hunkIndex: number) => void;
+  onExpandDown: (hunkIndex: number) => void;
+  onExpandAll: (gap: ExpandableGap) => void;
+}
 
 interface UnifiedDiffProps {
   hunks: DiffHunk[];
@@ -18,6 +26,9 @@ interface UnifiedDiffProps {
   /** Map<"lineno:side", SearchRange[]> for the current file */
   searchMatchesByKey?: Map<string, SearchRange[]>;
   threadResolutions?: Map<number, ThreadResolutionInfo>;
+  gaps?: ExpandableGap[];
+  expandCallbacks?: ExpandCallbacks;
+  expandLoading?: boolean;
 }
 
 export function UnifiedDiff(props: UnifiedDiffProps) {
@@ -76,6 +87,18 @@ export function UnifiedDiff(props: UnifiedDiffProps) {
     return props.searchMatchesByKey.get(`${lineno}:${side}`);
   };
 
+  // Index gaps by hunkIndex for quick lookup
+  const gapsByHunk = createMemo(() => {
+    const map = new Map<string, ExpandableGap>();
+    for (const gap of props.gaps ?? []) {
+      map.set(`${gap.position}:${gap.hunkIndex}`, gap);
+    }
+    return map;
+  });
+
+  const getGap = (position: string, hunkIndex: number) =>
+    gapsByHunk().get(`${position}:${hunkIndex}`);
+
   return (
     <table class="w-full border-collapse font-mono text-xs leading-5" style={{ "table-layout": "fixed" }}>
       <colgroup>
@@ -85,14 +108,48 @@ export function UnifiedDiff(props: UnifiedDiffProps) {
       </colgroup>
       <tbody>
         <For each={props.hunks}>
-          {(hunk) => (
+          {(hunk, hunkIdx) => {
+            const beforeGap = () => getGap("before", hunkIdx());
+            const betweenGap = () => getGap("between", hunkIdx());
+            const afterGap = () => hunkIdx() === props.hunks.length - 1 ? getGap("after", hunkIdx()) : undefined;
+
+            return (
             <>
-              {/* Hunk header */}
-              <tr>
-                <td colspan={3} class="px-3 py-1 text-xs text-(--color-text-muted) bg-(--color-diff-hunk-bg) border-y border-(--color-border-muted)">
-                  {hunk.header}
-                </td>
-              </tr>
+              {/* Expand row before first hunk */}
+              <Show when={hunkIdx() === 0 && beforeGap()}>
+                {(gap) => (
+                  <ExpandContextRow
+                    colspan={3}
+                    lineCount={gap().lineCount}
+                    loading={props.expandLoading}
+                    onExpandDown={props.expandCallbacks ? () => props.expandCallbacks!.onExpandUp(0) : undefined}
+                    onExpandAll={props.expandCallbacks ? () => props.expandCallbacks!.onExpandAll(gap()) : undefined}
+                  />
+                )}
+              </Show>
+
+              {/* Expand row between hunks (replaces hunk header) */}
+              <Show when={hunkIdx() > 0 && betweenGap()}>
+                {(gap) => (
+                  <ExpandContextRow
+                    colspan={3}
+                    lineCount={gap().lineCount}
+                    loading={props.expandLoading}
+                    onExpandUp={props.expandCallbacks ? () => props.expandCallbacks!.onExpandUp(hunkIdx()) : undefined}
+                    onExpandDown={props.expandCallbacks ? () => props.expandCallbacks!.onExpandDown(hunkIdx() - 1) : undefined}
+                    onExpandAll={props.expandCallbacks ? () => props.expandCallbacks!.onExpandAll(gap()) : undefined}
+                  />
+                )}
+              </Show>
+
+              {/* Hunk header — hide when there's a between-gap expand row replacing it */}
+              <Show when={!(hunkIdx() > 0 && betweenGap())}>
+                <tr>
+                  <td colspan={3} class="px-3 py-1 text-xs text-(--color-text-muted) bg-(--color-diff-hunk-bg) border-y border-(--color-border-muted)">
+                    {hunk.header}
+                  </td>
+                </tr>
+              </Show>
 
               {/* Lines */}
               <For each={hunk.lines}>
@@ -225,8 +282,22 @@ export function UnifiedDiff(props: UnifiedDiffProps) {
                   );
                 }}
               </For>
+
+              {/* Expand row after last hunk */}
+              <Show when={afterGap()}>
+                {(gap) => (
+                  <ExpandContextRow
+                    colspan={3}
+                    lineCount={gap().lineCount}
+                    loading={props.expandLoading}
+                    onExpandUp={props.expandCallbacks ? () => props.expandCallbacks!.onExpandDown(hunkIdx()) : undefined}
+                    onExpandAll={props.expandCallbacks ? () => props.expandCallbacks!.onExpandAll(gap()) : undefined}
+                  />
+                )}
+              </Show>
             </>
-          )}
+            );
+          }}
         </For>
       </tbody>
     </table>

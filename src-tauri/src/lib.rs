@@ -44,6 +44,7 @@ pub fn run() {
             commands::commits::get_pr_commits,
             commands::commits::get_compare_files,
             commands::files::get_pr_files,
+            commands::files::get_file_content,
             commands::comments::get_pr_comments,
             commands::comments::add_comment,
             commands::comments::reply_to_comment,

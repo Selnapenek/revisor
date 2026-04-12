@@ -1,15 +1,19 @@
 import { For, Show, createMemo } from "solid-js";
-import type { SideBySideRow, WordDiffPair } from "~/api/files";
+import type { DiffHunk, SideBySideRow, WordDiffPair } from "~/api/files";
 import type { ReviewComment, ThreadResolutionInfo } from "~/types/pr";
 import type { CommentActions, NewCommentTarget } from "./DiffViewer";
 import type { SearchRange } from "~/lib/search";
+import type { ExpandableGap } from "~/lib/expand-context";
+import type { ExpandCallbacks } from "./UnifiedDiff";
 import { buildThreads, threadsByLine } from "~/lib/comments";
 import { CommentThreadView } from "~/components/comments/CommentThread";
 import { CommentForm } from "~/components/comments/CommentForm";
 import { DiffLineContent } from "./DiffLineContent";
+import { ExpandContextRow } from "./ExpandContextRow";
 
 interface SplitDiffProps {
   rows: SideBySideRow[];
+  hunks: DiffHunk[];
   wordDiffs: WordDiffPair[];
   comments: ReviewComment[];
   commentActions: CommentActions;
@@ -18,6 +22,9 @@ interface SplitDiffProps {
   /** Map<"old:N" | "new:N", SearchRange[]> for the current file */
   searchMatchesByKey?: Map<string, SearchRange[]>;
   threadResolutions?: Map<number, ThreadResolutionInfo>;
+  gaps?: ExpandableGap[];
+  expandCallbacks?: ExpandCallbacks;
+  expandLoading?: boolean;
 }
 
 export function SplitDiff(props: SplitDiffProps) {
@@ -60,6 +67,31 @@ export function SplitDiff(props: SplitDiffProps) {
     return false;
   };
 
+  // Map hunk headers in rows to their hunk index for gap matching
+  const hunkHeaderIndices = createMemo(() => {
+    const map = new Map<number, number>(); // rowIndex -> hunkIndex
+    let hunkIdx = 0;
+    for (let i = 0; i < props.rows.length; i++) {
+      if (props.rows[i].is_hunk_header) {
+        map.set(i, hunkIdx);
+        hunkIdx++;
+      }
+    }
+    return map;
+  });
+
+  // Index gaps by hunkIndex for quick lookup
+  const gapsByHunk = createMemo(() => {
+    const map = new Map<string, ExpandableGap>();
+    for (const gap of props.gaps ?? []) {
+      map.set(`${gap.position}:${gap.hunkIndex}`, gap);
+    }
+    return map;
+  });
+
+  const getGap = (position: string, hunkIndex: number) =>
+    gapsByHunk().get(`${position}:${hunkIndex}`);
+
   return (
     <table class="w-full border-collapse font-mono text-xs leading-5" style={{ "table-layout": "fixed" }}>
       <colgroup>
@@ -70,16 +102,58 @@ export function SplitDiff(props: SplitDiffProps) {
       </colgroup>
       <tbody>
         <For each={props.rows}>
-          {(row) => (
+          {(row, rowIdx) => {
+            const hunkIdx = () => hunkHeaderIndices().get(rowIdx());
+
+            return (
+            <>
             <Show
               when={!row.is_hunk_header}
-              fallback={
-                <tr>
-                  <td colspan={4} class="px-3 py-1 text-xs text-(--color-text-muted) bg-(--color-diff-hunk-bg) border-y border-(--color-border-muted)">
-                    {row.hunk_header}
-                  </td>
-                </tr>
-              }
+              fallback={(() => {
+                const hi = hunkIdx()!;
+                const beforeGap = hi === 0 ? getGap("before", 0) : undefined;
+                const betweenGap = hi > 0 ? getGap("between", hi) : undefined;
+
+                return (
+                  <>
+                    {/* Expand row before first hunk */}
+                    <Show when={hi === 0 && beforeGap}>
+                      {(gap) => (
+                        <ExpandContextRow
+                          colspan={4}
+                          lineCount={gap().lineCount}
+                          loading={props.expandLoading}
+                          onExpandDown={props.expandCallbacks ? () => props.expandCallbacks!.onExpandUp(0) : undefined}
+                          onExpandAll={props.expandCallbacks ? () => props.expandCallbacks!.onExpandAll(gap()) : undefined}
+                        />
+                      )}
+                    </Show>
+
+                    {/* Expand row between hunks (replaces hunk header) */}
+                    <Show
+                      when={betweenGap}
+                      fallback={
+                        <tr>
+                          <td colspan={4} class="px-3 py-1 text-xs text-(--color-text-muted) bg-(--color-diff-hunk-bg) border-y border-(--color-border-muted)">
+                            {row.hunk_header}
+                          </td>
+                        </tr>
+                      }
+                    >
+                      {(gap) => (
+                        <ExpandContextRow
+                          colspan={4}
+                          lineCount={gap().lineCount}
+                          loading={props.expandLoading}
+                          onExpandUp={props.expandCallbacks ? () => props.expandCallbacks!.onExpandUp(hi) : undefined}
+                          onExpandDown={props.expandCallbacks ? () => props.expandCallbacks!.onExpandDown(hi - 1) : undefined}
+                          onExpandAll={props.expandCallbacks ? () => props.expandCallbacks!.onExpandAll(gap()) : undefined}
+                        />
+                      )}
+                    </Show>
+                  </>
+                );
+              })()}
             >
               {/* Diff line row */}
               <tr class="group">
@@ -192,7 +266,22 @@ export function SplitDiff(props: SplitDiffProps) {
                 </tr>
               </Show>
             </Show>
-          )}
+
+              {/* Expand row after last hunk */}
+              <Show when={rowIdx() === props.rows.length - 1 && getGap("after", props.hunks.length - 1)}>
+                {(gap) => (
+                  <ExpandContextRow
+                    colspan={4}
+                    lineCount={gap().lineCount}
+                    loading={props.expandLoading}
+                    onExpandUp={props.expandCallbacks ? () => props.expandCallbacks!.onExpandDown(props.hunks.length - 1) : undefined}
+                    onExpandAll={props.expandCallbacks ? () => props.expandCallbacks!.onExpandAll(gap()) : undefined}
+                  />
+                )}
+              </Show>
+            </>
+            );
+          }}
         </For>
       </tbody>
     </table>

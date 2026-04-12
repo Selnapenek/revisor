@@ -72,6 +72,7 @@ export interface ReviewComment {
   in_reply_to_id: number | null;
   review_id: number | null;
   html_url: string;
+  outdated: boolean;
 }
 
 export interface ThreadResolutionInfo {

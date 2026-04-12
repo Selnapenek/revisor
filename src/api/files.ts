@@ -54,6 +54,15 @@ export interface ProcessedFile {
   diff: ProcessedDiff | null;
 }
 
+export async function getFileContent(
+  owner: string,
+  repo: string,
+  path: string,
+  ref_: string,
+): Promise<string[]> {
+  return invoke<string[]>("get_file_content", { owner, repo, path, ref: ref_ });
+}
+
 export async function getPrFiles(
   owner: string,
   repo: string,

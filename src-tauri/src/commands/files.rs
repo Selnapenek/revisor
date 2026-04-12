@@ -64,6 +64,25 @@ pub async fn get_pr_files(
     Ok(process_pr_files(all_files))
 }
 
+#[tauri::command]
+pub async fn get_file_content(
+    state: State<'_, AppState>,
+    owner: String,
+    repo: String,
+    path: String,
+    ref_: String,
+) -> Result<Vec<String>, String> {
+    let guard = state.provider.read().await;
+    let provider = guard.as_ref().ok_or("Not authenticated")?;
+
+    let content = provider
+        .get_file_content(&owner, &repo, &path, &ref_)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(content.split('\n').map(|s| s.to_string()).collect())
+}
+
 /// Process raw PR files into frontend-ready format with parsed diffs
 pub fn process_pr_files(files: Vec<PrFile>) -> Vec<ProcessedFile> {
     files
