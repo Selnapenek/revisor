@@ -808,7 +808,7 @@ impl GitProvider for GithubProvider {
             }
         }
 
-        let query = qualifiers.join("+");
+        let query = qualifiers.join(" ");
         let url = format!(
             "https://api.github.com/search/issues?q={}&sort=updated&order=desc&per_page={}&page={}",
             urlencoding(&query), per_page, page

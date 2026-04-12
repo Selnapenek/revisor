@@ -204,13 +204,6 @@ export default function PRListPage() {
           onScroll={handleScroll}
           onMouseLeave={cancelPrefetch}
         >
-          <Show when={isRefreshing()}>
-            <div class="flex items-center justify-center gap-2 px-4 py-1.5 text-xs text-(--color-text-muted)">
-              <Spinner size={12} class="text-(--color-text-muted)" />
-              <span>Refreshing…</span>
-            </div>
-          </Show>
-
           <div
             style={{
               height: `${virtualizer.getTotalSize()}px`,
@@ -221,23 +214,27 @@ export default function PRListPage() {
               {(virtualRow) => {
                 const pr = () => items()[virtualRow.index];
                 return (
-                  <div
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      width: "100%",
-                      transform: `translateY(${virtualRow.start}px)`,
-                    }}
-                    data-index={virtualRow.index}
-                    ref={(el) => virtualizer.measureElement(el)}
-                  >
-                    <PRListItem
-                      pr={pr()}
-                      onClick={() => handlePrClick(pr().number)}
-                      onHover={() => handlePrHover(pr().number)}
-                    />
-                  </div>
+                  <Show when={pr()}>
+                    {(safePr) => (
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          left: 0,
+                          width: "100%",
+                          transform: `translateY(${virtualRow.start}px)`,
+                        }}
+                        data-index={virtualRow.index}
+                        ref={(el) => virtualizer.measureElement(el)}
+                      >
+                        <PRListItem
+                          pr={safePr()}
+                          onClick={() => handlePrClick(safePr().number)}
+                          onHover={() => handlePrHover(safePr().number)}
+                        />
+                      </div>
+                    )}
+                  </Show>
                 );
               }}
             </For>
