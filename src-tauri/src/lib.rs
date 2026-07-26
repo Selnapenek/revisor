@@ -46,6 +46,8 @@ pub fn run() {
             commands::files::get_pr_files,
             commands::files::get_file_content,
             commands::comments::get_pr_comments,
+            commands::comments::get_issue_comments,
+            commands::comments::get_pr_reviews,
             commands::comments::add_comment,
             commands::comments::reply_to_comment,
             commands::comments::update_comment,

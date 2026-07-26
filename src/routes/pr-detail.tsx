@@ -82,7 +82,11 @@ export default function PRDetailPage() {
     target.addEventListener("pointerup", onUp);
   };
 
-  const conversationCount = createMemo(() => buildThreads(prDetailStore.comments, prDetailStore.threadResolutions).length);
+  const conversationCount = createMemo(() =>
+    buildThreads(prDetailStore.comments, prDetailStore.threadResolutions).length
+    + prDetailStore.issueComments.length
+    + prDetailStore.reviews.filter((r) => r.body.trim()).length
+  );
 
   const expandFile = (path: string) => {
     setCollapsedFiles((prev) => {
@@ -132,7 +136,7 @@ export default function PRDetailPage() {
     prDetailStore.setIsLoadingComments(true);
 
     try {
-      const { pr, files, comments, reviewed, resolutions, commits } = await (
+      const { pr, files, comments, issueComments, reviews, reviewed, resolutions, commits } = await (
         consumePrefetch(params.owner, params.repo, prNumber())
         ?? fetchPrDetail(params.owner, params.repo, prNumber())
       );
@@ -140,6 +144,8 @@ export default function PRDetailPage() {
       prDetailStore.setPr(pr);
       prDetailStore.setFiles(files);
       prDetailStore.setComments(comments);
+      prDetailStore.setIssueComments(issueComments);
+      prDetailStore.setReviews(reviews);
       prDetailStore.setReviewedFiles(new Set(reviewed));
       prDetailStore.setThreadResolutions(
         new Map(resolutions.map((r) => [r.root_comment_id, r]))

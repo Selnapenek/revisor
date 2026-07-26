@@ -1,9 +1,18 @@
-import { createSignal, createMemo, For, Show } from "solid-js";
+import { createSignal, createMemo, For, Show, Switch, Match } from "solid-js";
 import { prDetailStore } from "~/stores";
 import { buildThreads } from "~/lib/comments";
+import type { CommentThread } from "~/lib/comments";
+import type { IssueComment, PrReview } from "~/types/pr";
 import { ConversationItem } from "./ConversationItem";
+import { IssueCommentItem } from "./IssueCommentItem";
+import { ReviewItem } from "./ReviewItem";
 
 type ResolutionFilter = "all" | "unresolved" | "resolved";
+
+type TimelineEntry =
+  | { kind: "thread"; thread: CommentThread; timestamp: string }
+  | { kind: "issue_comment"; comment: IssueComment; timestamp: string }
+  | { kind: "review"; review: PrReview; timestamp: string };
 
 interface ConversationListProps {
   onSelectThread: (filePath: string, threadId: number) => void;
@@ -14,34 +23,64 @@ export function ConversationList(props: ConversationListProps) {
   const [filterQuery, setFilterQuery] = createSignal("");
   const [resolutionFilter, setResolutionFilter] = createSignal<ResolutionFilter>("all");
 
-  const allThreads = createMemo(() => {
-    const threads = buildThreads(prDetailStore.comments, prDetailStore.threadResolutions);
-    return threads.sort((a, b) => {
-      const aLatest =
-        a.replies.length > 0
-          ? a.replies[a.replies.length - 1].created_at
-          : a.root.created_at;
-      const bLatest =
-        b.replies.length > 0
-          ? b.replies[b.replies.length - 1].created_at
-          : b.root.created_at;
-      return bLatest.localeCompare(aLatest);
-    });
+  const allThreads = createMemo(() =>
+    buildThreads(prDetailStore.comments, prDetailStore.threadResolutions)
+  );
+
+  const timeline = createMemo(() => {
+    const entries: TimelineEntry[] = [];
+
+    for (const thread of allThreads()) {
+      const latestTs =
+        thread.replies.length > 0
+          ? thread.replies[thread.replies.length - 1].created_at
+          : thread.root.created_at;
+      entries.push({ kind: "thread", thread, timestamp: latestTs });
+    }
+
+    for (const comment of prDetailStore.issueComments) {
+      entries.push({ kind: "issue_comment", comment, timestamp: comment.created_at });
+    }
+
+    for (const review of prDetailStore.reviews) {
+      // Only show reviews that have a body (skip empty approvals etc.)
+      if (!review.body.trim()) continue;
+      entries.push({ kind: "review", review, timestamp: review.submitted_at ?? "" });
+    }
+
+    entries.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    return entries;
   });
 
-  const filteredThreads = createMemo(() => {
-    let threads = allThreads();
+  const filteredTimeline = createMemo(() => {
+    let entries = timeline();
 
-    // Resolution filter
+    // Resolution filter — only affects threads; non-thread entries always pass
     const rf = resolutionFilter();
-    if (rf === "resolved") threads = threads.filter((t) => t.isResolved);
-    if (rf === "unresolved") threads = threads.filter((t) => !t.isResolved);
+    if (rf === "resolved") {
+      entries = entries.filter((e) => e.kind !== "thread" || e.thread.isResolved);
+    }
+    if (rf === "unresolved") {
+      entries = entries.filter((e) => e.kind !== "thread" || !e.thread.isResolved);
+    }
 
-    // Text filter
+    // Text filter — applies to all types
     const q = filterQuery().toLowerCase();
-    if (!q) return threads;
-    return threads.filter((thread) => {
-      const all = [thread.root, ...thread.replies];
+    if (!q) return entries;
+    return entries.filter((entry) => {
+      if (entry.kind === "issue_comment") {
+        return (
+          entry.comment.author_login.toLowerCase().includes(q) ||
+          entry.comment.body.toLowerCase().includes(q)
+        );
+      }
+      if (entry.kind === "review") {
+        return (
+          entry.review.author_login.toLowerCase().includes(q) ||
+          entry.review.body.toLowerCase().includes(q)
+        );
+      }
+      const all = [entry.thread.root, ...entry.thread.replies];
       return all.some(
         (c) =>
           c.author_login.toLowerCase().includes(q) ||
@@ -110,13 +149,16 @@ export function ConversationList(props: ConversationListProps) {
           <Show when={resolvedCount() > 0}>
             <span class="text-(--color-text-muted)"> · {resolvedCount()} resolved</span>
           </Show>
+          <Show when={prDetailStore.issueComments.length > 0}>
+            <span class="text-(--color-text-muted)"> · {prDetailStore.issueComments.length} comment{prDetailStore.issueComments.length !== 1 ? "s" : ""}</span>
+          </Show>
         </span>
       </div>
 
-      {/* Thread list */}
+      {/* Timeline list */}
       <div class="flex-1 overflow-auto">
         <Show
-          when={filteredThreads().length > 0}
+          when={filteredTimeline().length > 0}
           fallback={
             <Show when={filterQuery() || resolutionFilter() !== "all"}>
               <div class="px-3 py-4 text-xs text-(--color-text-muted) text-center">
@@ -125,15 +167,36 @@ export function ConversationList(props: ConversationListProps) {
             </Show>
           }
         >
-          <For each={filteredThreads()}>
-            {(thread) => (
-              <ConversationItem
-                thread={thread}
-                isActive={props.activeThreadId === thread.root.id}
-                onClick={() =>
-                  props.onSelectThread(thread.root.path, thread.root.id)
-                }
-              />
+          <For each={filteredTimeline()}>
+            {(entry) => (
+              <Switch>
+                <Match when={entry.kind === "thread" && entry}>
+                  {(e) => {
+                    const threadEntry = e() as TimelineEntry & { kind: "thread" };
+                    return (
+                      <ConversationItem
+                        thread={threadEntry.thread}
+                        isActive={props.activeThreadId === threadEntry.thread.root.id}
+                        onClick={() =>
+                          props.onSelectThread(threadEntry.thread.root.path, threadEntry.thread.root.id)
+                        }
+                      />
+                    );
+                  }}
+                </Match>
+                <Match when={entry.kind === "issue_comment" && entry}>
+                  {(e) => {
+                    const commentEntry = e() as TimelineEntry & { kind: "issue_comment" };
+                    return <IssueCommentItem comment={commentEntry.comment} />;
+                  }}
+                </Match>
+                <Match when={entry.kind === "review" && entry}>
+                  {(e) => {
+                    const reviewEntry = e() as TimelineEntry & { kind: "review" };
+                    return <ReviewItem review={reviewEntry.review} />;
+                  }}
+                </Match>
+              </Switch>
             )}
           </For>
         </Show>

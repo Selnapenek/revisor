@@ -2,17 +2,21 @@ import {
   getPullRequest,
   getPrFiles,
   getPrComments,
+  getIssueComments,
+  getPrReviews,
   getReviewedFiles,
   getThreadResolutions,
   getPrCommits,
 } from "~/api";
-import type { PullRequest, ReviewComment, ThreadResolutionInfo, Commit } from "~/types/pr";
+import type { PullRequest, ReviewComment, ThreadResolutionInfo, Commit, IssueComment, PrReview } from "~/types/pr";
 import type { ProcessedFile } from "~/api/files";
 
 export interface PrPrefetchData {
   pr: PullRequest;
   files: ProcessedFile[];
   comments: ReviewComment[];
+  issueComments: IssueComment[];
+  reviews: PrReview[];
   reviewed: string[];
   resolutions: ThreadResolutionInfo[];
   commits: Commit[];
@@ -39,15 +43,17 @@ export async function fetchPrDetail(
   repo: string,
   number: number,
 ): Promise<PrPrefetchData> {
-  const [pr, files, comments, reviewed, resolutions, commits] = await Promise.all([
+  const [pr, files, comments, issueComments, reviews, reviewed, resolutions, commits] = await Promise.all([
     getPullRequest(owner, repo, number),
     getPrFiles(owner, repo, number),
     getPrComments(owner, repo, number),
+    getIssueComments(owner, repo, number),
+    getPrReviews(owner, repo, number),
     getReviewedFiles(owner, repo, number),
     getThreadResolutions(owner, repo, number),
     getPrCommits(owner, repo, number),
   ]);
-  return { pr, files, comments, reviewed, resolutions, commits };
+  return { pr, files, comments, issueComments, reviews, reviewed, resolutions, commits };
 }
 
 export function prefetch(owner: string, repo: string, number: number): void {

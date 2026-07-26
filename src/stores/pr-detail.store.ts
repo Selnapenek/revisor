@@ -1,5 +1,5 @@
 import { createSignal, createMemo } from "solid-js";
-import type { PullRequest, ReviewComment, ThreadResolutionInfo, Commit } from "~/types/pr";
+import type { PullRequest, ReviewComment, ThreadResolutionInfo, Commit, IssueComment, PrReview } from "~/types/pr";
 import type { ProcessedFile, DiffHunk, SideBySideRow } from "~/api/files";
 import { getFileContent } from "~/api/files";
 import { toSideBySide } from "~/lib/expand-context";
@@ -14,6 +14,8 @@ export type CommitSelection =
 const [pr, setPr] = createSignal<PullRequest | null>(null);
 const [files, setFiles] = createSignal<ProcessedFile[]>([]);
 const [comments, setComments] = createSignal<ReviewComment[]>([]);
+const [issueComments, setIssueComments] = createSignal<IssueComment[]>([]);
+const [reviews, setReviews] = createSignal<PrReview[]>([]);
 const [reviewedFiles, setReviewedFiles] = createSignal<Set<string>>(new Set());
 const [selectedFilePath, setSelectedFilePath] = createSignal<string | null>(null);
 const [diffMode, setDiffMode] = createSignal<DiffMode>("split");
@@ -32,6 +34,8 @@ export const prDetailStore = {
   get pr() { return pr(); },
   get files() { return files(); },
   get comments() { return comments(); },
+  get issueComments() { return issueComments(); },
+  get reviews() { return reviews(); },
   get reviewedFiles() { return reviewedFiles(); },
   get selectedFilePath() { return selectedFilePath(); },
   get diffMode() { return diffMode(); },
@@ -78,6 +82,8 @@ export const prDetailStore = {
   setPr,
   setFiles,
   setComments,
+  setIssueComments,
+  setReviews,
   setReviewedFiles,
   setSelectedFilePath,
   setDiffMode,
@@ -188,6 +194,8 @@ export const prDetailStore = {
     setPr(null);
     setFiles([]);
     setComments([]);
+    setIssueComments([]);
+    setReviews([]);
     setReviewedFiles(new Set<string>());
     setSelectedFilePath(null);
     setIsLoadingFiles(false);

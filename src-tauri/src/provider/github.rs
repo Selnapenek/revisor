@@ -485,6 +485,54 @@ struct GhReviewComment {
     html_url: String,
 }
 
+#[derive(Deserialize)]
+struct GhIssueComment {
+    id: u64,
+    body: String,
+    user: GhPrUser,
+    created_at: String,
+    updated_at: String,
+    html_url: String,
+}
+
+impl From<GhIssueComment> for IssueComment {
+    fn from(c: GhIssueComment) -> Self {
+        Self {
+            id: c.id,
+            body: c.body,
+            author_login: c.user.login,
+            author_avatar: c.user.avatar_url,
+            created_at: c.created_at,
+            updated_at: c.updated_at,
+            html_url: c.html_url,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct GhPrReview {
+    id: u64,
+    body: Option<String>,
+    state: String,
+    user: GhPrUser,
+    submitted_at: Option<String>,
+    html_url: String,
+}
+
+impl From<GhPrReview> for PrReview {
+    fn from(r: GhPrReview) -> Self {
+        Self {
+            id: r.id,
+            body: r.body.unwrap_or_default(),
+            state: r.state,
+            author_login: r.user.login,
+            author_avatar: r.user.avatar_url,
+            submitted_at: r.submitted_at,
+            html_url: r.html_url,
+        }
+    }
+}
+
 impl From<GhPullRequest> for PullRequest {
     fn from(pr: GhPullRequest) -> Self {
         Self {
@@ -650,6 +698,64 @@ impl GitProvider for GithubProvider {
         }
 
         Ok(all_comments)
+    }
+
+    async fn get_issue_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<IssueComment>> {
+        let mut all_comments = Vec::new();
+        let mut page = 1u32;
+
+        loop {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/issues/{}/comments?per_page=100&page={}",
+                owner, repo, number, page
+            );
+
+            let (items, has_next): (Vec<GhIssueComment>, bool) =
+                self.get_with_pagination(&url).await?;
+
+            all_comments.extend(items.into_iter().map(IssueComment::from));
+
+            if !has_next {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(all_comments)
+    }
+
+    async fn get_pr_reviews(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<PrReview>> {
+        let mut all_reviews = Vec::new();
+        let mut page = 1u32;
+
+        loop {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/pulls/{}/reviews?per_page=100&page={}",
+                owner, repo, number, page
+            );
+
+            let (items, has_next): (Vec<GhPrReview>, bool) =
+                self.get_with_pagination(&url).await?;
+
+            all_reviews.extend(items.into_iter().map(PrReview::from));
+
+            if !has_next {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(all_reviews)
     }
 
     async fn add_comment(

@@ -1,4 +1,4 @@
-use crate::provider::types::{NewComment, ReviewComment, ThreadResolutionInfo};
+use crate::provider::types::{IssueComment, NewComment, PrReview, ReviewComment, ThreadResolutionInfo};
 use crate::AppState;
 use tauri::State;
 
@@ -47,6 +47,38 @@ pub async fn get_pr_comments(
 
     provider
         .get_pr_comments(&owner, &repo, number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_issue_comments(
+    state: State<'_, AppState>,
+    owner: String,
+    repo: String,
+    number: u64,
+) -> Result<Vec<IssueComment>, String> {
+    let guard = state.provider.read().await;
+    let provider = guard.as_ref().ok_or("Not authenticated")?;
+
+    provider
+        .get_issue_comments(&owner, &repo, number)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_pr_reviews(
+    state: State<'_, AppState>,
+    owner: String,
+    repo: String,
+    number: u64,
+) -> Result<Vec<PrReview>, String> {
+    let guard = state.provider.read().await;
+    let provider = guard.as_ref().ok_or("Not authenticated")?;
+
+    provider
+        .get_pr_reviews(&owner, &repo, number)
         .await
         .map_err(|e| e.to_string())
 }

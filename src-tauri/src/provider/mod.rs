@@ -46,6 +46,22 @@ pub trait GitProvider: Send + Sync {
         number: u64,
     ) -> Result<Vec<ReviewComment>>;
 
+    /// Get top-level conversation comments on a pull request (issue comments)
+    async fn get_issue_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<IssueComment>>;
+
+    /// Get reviews on a pull request (submitted via "Finish your review")
+    async fn get_pr_reviews(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<PrReview>>;
+
     /// Add a new review comment
     async fn add_comment(
         &self,

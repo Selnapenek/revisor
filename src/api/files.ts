@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ReviewComment, ThreadResolutionInfo } from "~/types/pr";
+import type { ReviewComment, ThreadResolutionInfo, IssueComment, PrReview } from "~/types/pr";
 
 export interface ProcessedDiff {
   hunks: DiffHunk[];
@@ -77,6 +77,22 @@ export async function getPrComments(
   number: number,
 ): Promise<ReviewComment[]> {
   return invoke<ReviewComment[]>("get_pr_comments", { owner, repo, number });
+}
+
+export async function getIssueComments(
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<IssueComment[]> {
+  return invoke<IssueComment[]>("get_issue_comments", { owner, repo, number });
+}
+
+export async function getPrReviews(
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<PrReview[]> {
+  return invoke<PrReview[]>("get_pr_reviews", { owner, repo, number });
 }
 
 export async function addComment(

@@ -75,6 +75,26 @@ export interface ReviewComment {
   outdated: boolean;
 }
 
+export interface IssueComment {
+  id: number;
+  body: string;
+  author_login: string;
+  author_avatar: string;
+  created_at: string;
+  updated_at: string;
+  html_url: string;
+}
+
+export interface PrReview {
+  id: number;
+  body: string;
+  state: string;
+  author_login: string;
+  author_avatar: string;
+  submitted_at: string | null;
+  html_url: string;
+}
+
 export interface ThreadResolutionInfo {
   root_comment_id: number;
   thread_node_id: string;

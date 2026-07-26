@@ -142,6 +142,30 @@ pub struct ReviewComment {
     pub outdated: bool,
 }
 
+/// Top-level PR conversation comment (issue comment)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueComment {
+    pub id: u64,
+    pub body: String,
+    pub author_login: String,
+    pub author_avatar: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub html_url: String,
+}
+
+/// PR review (submitted via "Finish your review")
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrReview {
+    pub id: u64,
+    pub body: String,
+    pub state: String,
+    pub author_login: String,
+    pub author_avatar: String,
+    pub submitted_at: Option<String>,
+    pub html_url: String,
+}
+
 /// Parameters for creating a new comment
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewComment {
