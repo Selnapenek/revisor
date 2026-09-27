@@ -1,6 +1,6 @@
 # GitHub OAuth setup
 
-Revisor uses GitHub OAuth device flow. Users do not need to create or paste a personal access token. Revisor keeps each user token in the operating system keyring. The OAuth client ID is public. Do not add a client secret to Revisor.
+Revisor uses GitHub OAuth device flow by default. Users can also choose to enter a personal access token. Revisor keeps each credential in the operating system keyring. The OAuth client ID is public. Do not add a client secret to Revisor.
 
 ## Register the OAuth app
 
@@ -25,5 +25,9 @@ pnpm tauri dev
 Use `pnpm tauri build` to build the app. The `pnpm tauri` command loads `.env` before it starts the Tauri CLI. Cargo reads the client ID at compile time, and the build script watches the environment variable and rebuilds when it changes. The `.env` file is local and is not part of Git. Do not add a client secret to it.
 
 The client ID is not a secret. Do not set a client secret. Users sign in by selecting **Sign in with GitHub**, then entering the code shown by Revisor at GitHub's device page. Revisor completes sign-in after approval.
+
+## Use a personal access token instead
+
+On the sign-in screen, select **Use a personal access token instead**. Create a GitHub personal access token that has the `repo` scope, then paste it into Revisor. Revisor validates the token and stores it in the operating system keyring. Do not put a personal token in `.env`.
 
 If device flow is disabled, the client ID is wrong, or the app returns expiring credentials, Revisor displays an error. Enable device flow and configure non-expiring tokens in the registered OAuth app.

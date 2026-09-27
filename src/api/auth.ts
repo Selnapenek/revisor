@@ -12,6 +12,10 @@ export async function startGithubLogin(): Promise<DeviceLoginInfo> {
   return invoke<DeviceLoginInfo>("start_github_login");
 }
 
+export async function validateAndStoreToken(token: string): Promise<ProviderUser> {
+  return invoke<ProviderUser>("validate_and_store_token", { token });
+}
+
 export async function waitForGithubLogin(attemptId: string): Promise<ProviderUser> {
   return invoke<ProviderUser>("wait_for_github_login", { attemptId });
 }

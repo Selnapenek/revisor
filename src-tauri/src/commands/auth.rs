@@ -11,6 +11,26 @@ use std::sync::{
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
+#[cfg(test)]
+mod tests {
+    use super::normalize_pat;
+
+    #[test]
+    fn rejects_empty_pat_and_trims_valid_pat() {
+        assert!(normalize_pat(" \n ").is_err());
+        assert_eq!(normalize_pat("  ghp_example  ").unwrap(), "ghp_example");
+    }
+}
+
+fn normalize_pat(token: &str) -> Result<&str, String> {
+    let token = token.trim();
+    if token.is_empty() {
+        Err("Personal access token is required.".into())
+    } else {
+        Ok(token)
+    }
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceLoginInfo {
@@ -18,6 +38,20 @@ pub struct DeviceLoginInfo {
     user_code: String,
     verification_uri: String,
     expires_in: u64,
+}
+
+#[tauri::command]
+pub async fn validate_and_store_token(
+    state: State<'_, AppState>,
+    token: String,
+) -> Result<ProviderUser, String> {
+    let token = normalize_pat(&token)?;
+    let provider = GithubProvider::new(token.to_owned()).map_err(|e| e.to_string())?;
+    let user = provider.validate_token().await.map_err(|e| e.to_string())?;
+    keyring::store_token(token).map_err(|e| e.to_string())?;
+    let mut guard = state.provider.write().await;
+    *guard = Some(Box::new(provider));
+    Ok(user)
 }
 
 #[tauri::command]

@@ -40,6 +40,7 @@ pub fn run() {
             commands::auth::start_github_login,
             commands::auth::wait_for_github_login,
             commands::auth::cancel_github_login,
+            commands::auth::validate_and_store_token,
             commands::auth::logout,
             commands::auth::restore_session,
             commands::repos::get_saved_repos,
