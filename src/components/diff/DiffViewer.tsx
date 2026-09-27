@@ -2,6 +2,7 @@ import { Show, Switch, Match, createSignal, createMemo, createEffect } from "sol
 import type { ProcessedFile, DiffHunk } from "~/api/files";
 import type { ReviewComment } from "~/types/pr";
 import type { SearchRange } from "~/lib/search";
+import type { SemanticAnchor } from "~/lib/semantic-search";
 import {
   computeGaps, expandUp, expandDown, expandBetween,
   expandAllBefore, expandAllAfter, toSideBySide,
@@ -45,6 +46,7 @@ interface DiffViewerProps {
   onToggleCollapsed: () => void;
   isReviewed: boolean;
   onToggleReviewed: () => void;
+  semanticAnchor?: SemanticAnchor | null;
 }
 
 export function DiffViewer(props: DiffViewerProps) {
@@ -353,6 +355,7 @@ export function DiffViewer(props: DiffViewerProps) {
                     currentUser={currentUser()}
                     newCommentTarget={newCommentTarget()}
                     searchMatchesByKey={searchMatchesByKey()}
+                    semanticAnchor={props.semanticAnchor}
                     threadResolutions={prDetailStore.threadResolutions}
                     gaps={gaps()}
                     expandCallbacks={expandCallbacks}
@@ -368,6 +371,7 @@ export function DiffViewer(props: DiffViewerProps) {
                     currentUser={currentUser()}
                     newCommentTarget={newCommentTarget()}
                     searchMatchesByKey={searchMatchesByKey()}
+                    semanticAnchor={props.semanticAnchor}
                     threadResolutions={prDetailStore.threadResolutions}
                     gaps={gaps()}
                     expandCallbacks={expandCallbacks}

@@ -3,6 +3,7 @@ import type { DiffHunk, SideBySideRow, WordDiffPair } from "~/api/files";
 import type { ReviewComment, ThreadResolutionInfo } from "~/types/pr";
 import type { CommentActions, NewCommentTarget } from "./DiffViewer";
 import type { SearchRange } from "~/lib/search";
+import type { SemanticAnchor } from "~/lib/semantic-search";
 import type { ExpandableGap } from "~/lib/expand-context";
 import type { ExpandCallbacks } from "./UnifiedDiff";
 import { buildThreads, threadsByLine } from "~/lib/comments";
@@ -21,6 +22,7 @@ interface SplitDiffProps {
   newCommentTarget: NewCommentTarget | null;
   /** Map<"old:N" | "new:N", SearchRange[]> for the current file */
   searchMatchesByKey?: Map<string, SearchRange[]>;
+  semanticAnchor?: SemanticAnchor | null;
   threadResolutions?: Map<number, ThreadResolutionInfo>;
   gaps?: ExpandableGap[];
   expandCallbacks?: ExpandCallbacks;
@@ -156,7 +158,8 @@ export function SplitDiff(props: SplitDiffProps) {
               })()}
             >
               {/* Diff line row */}
-              <tr class="group">
+              <tr data-old-line={row.left?.old_lineno ?? undefined} data-new-line={row.right?.new_lineno ?? undefined}
+                class={`group ${props.semanticAnchor && ((props.semanticAnchor.side === "old" && row.left?.old_lineno === props.semanticAnchor.line) || (props.semanticAnchor.side === "new" && row.right?.new_lineno === props.semanticAnchor.line)) ? "ring-1 ring-inset ring-(--color-accent-emphasis)" : ""}`}>
                 {/* Left side (old) */}
                 <td class={`text-right px-2 select-none relative ${lineGutterClass(row.left?.kind)}`}>
                   <span class="text-(--color-diff-gutter)">{row.left?.old_lineno ?? ""}</span>

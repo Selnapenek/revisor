@@ -3,6 +3,7 @@ import type { DiffHunk, DiffLine, WordDiffPair } from "~/api/files";
 import type { ReviewComment, ThreadResolutionInfo } from "~/types/pr";
 import type { CommentActions, NewCommentTarget } from "./DiffViewer";
 import type { SearchRange } from "~/lib/search";
+import type { SemanticAnchor } from "~/lib/semantic-search";
 import type { ExpandableGap } from "~/lib/expand-context";
 import { buildThreads, threadsByLine } from "~/lib/comments";
 import { CommentThreadView } from "~/components/comments/CommentThread";
@@ -25,6 +26,7 @@ interface UnifiedDiffProps {
   newCommentTarget: NewCommentTarget | null;
   /** Map<"lineno:side", SearchRange[]> for the current file */
   searchMatchesByKey?: Map<string, SearchRange[]>;
+  semanticAnchor?: SemanticAnchor | null;
   threadResolutions?: Map<number, ThreadResolutionInfo>;
   gaps?: ExpandableGap[];
   expandCallbacks?: ExpandCallbacks;
@@ -208,7 +210,8 @@ export function UnifiedDiff(props: UnifiedDiffProps) {
 
                   return (
                     <>
-                      <tr class="group">
+                      <tr data-old-line={line.old_lineno ?? undefined} data-new-line={line.new_lineno ?? undefined}
+                        class={`group ${props.semanticAnchor && ((props.semanticAnchor.side === "old" && line.old_lineno === props.semanticAnchor.line) || (props.semanticAnchor.side === "new" && line.new_lineno === props.semanticAnchor.line)) ? "ring-1 ring-inset ring-(--color-accent-emphasis)" : ""}`}>
                         <td class={`text-right px-2 select-none relative ${gutterClass()}`}>
                           <span class="text-(--color-diff-gutter)">{line.old_lineno ?? ""}</span>
                           <Show when={gutterInfo}>

@@ -6,3 +6,4 @@ pub mod focus;
 pub mod pull_requests;
 pub mod repos;
 pub mod review;
+pub mod semantic;

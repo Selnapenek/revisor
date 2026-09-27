@@ -2,6 +2,7 @@ mod cache;
 mod commands;
 mod diff;
 mod focus;
+mod semantic;
 mod highlight;
 mod keyring;
 mod oauth;
@@ -62,6 +63,7 @@ pub fn run() {
             commands::focus::focus_save_key,
             commands::focus::focus_remove_key,
             commands::focus::find_focus_files,
+            commands::semantic::search_semantic_diff,
             commands::comments::get_pr_comments,
             commands::comments::get_issue_comments,
             commands::comments::get_pr_reviews,

@@ -13,6 +13,8 @@ import { searchStore } from "~/stores/search.store";
 import { buildThreads } from "~/lib/comments";
 import { FileTree } from "~/components/file-tree/FileTree";
 import { FocusPanel } from "~/components/file-tree/FocusPanel";
+import { SemanticSearchPanel } from "~/components/diff/SemanticSearchPanel";
+import { semanticAnchor, type SemanticHit, type SemanticAnchor } from "~/lib/semantic-search";
 import { isLatestFocusRequest } from "~/lib/focus-files";
 import { ConversationList } from "~/components/conversations/ConversationList";
 import { DiffViewer } from "~/components/diff/DiffViewer";
@@ -51,8 +53,9 @@ export default function PRDetailPage() {
   let fileFilterRef: HTMLInputElement | undefined;
 
   const prNumber = () => parseInt(params.number, 10);
-  const [activeTab, setActiveTab] = createSignal<"files" | "conversations">("files");
+  const [activeTab, setActiveTab] = createSignal<"files" | "conversations" | "semantic">("files");
   const [scrollToThreadId, setScrollToThreadId] = createSignal<number | null>(null);
+  const [semanticTarget, setSemanticTarget] = createSignal<{ filename: string; anchor: SemanticAnchor } | null>(null);
   const [sidebarWidth, setSidebarWidth] = createSignal(readPersistedWidth() ?? SIDEBAR_DEFAULT);
   const [isResizing, setIsResizing] = createSignal(false);
   const [collapsedFiles, setCollapsedFiles] = createSignal<Set<string>>(new Set());
@@ -287,6 +290,24 @@ export default function PRDetailPage() {
     });
   };
 
+  const handleSelectSemanticHit = (hit: SemanticHit) => {
+    const file = prDetailStore.files.find((item) => item.filename === hit.filename);
+    if (!file) return;
+    const anchor = semanticAnchor(file, hit.hunkIndex);
+    if (!anchor) return;
+    searchStore.setFileFilterQuery("");
+    searchStore.setIncludePattern("");
+    searchStore.setExcludePattern("");
+    prDetailStore.setSelectedFilePath(hit.filename);
+    expandFile(hit.filename);
+    setSemanticTarget({ filename: hit.filename, anchor });
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const section = scrollContainerRef?.querySelector(`[data-file-section="${CSS.escape(hit.filename)}"]`);
+      const row = section?.querySelector(`[data-${anchor.side}-line="${anchor.line}"]`);
+      (row ?? section)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }));
+  };
+
   const handleSelectThread = (filePath: string, threadId: number) => {
     prDetailStore.setSelectedFilePath(filePath);
     expandFile(filePath);
@@ -311,6 +332,7 @@ export default function PRDetailPage() {
     const requestId = ++fileRequestId;
     setCommitFilesLoading(true);
     prDetailStore.setCommitSelection(selection);
+    setSemanticTarget(null);
 
     try {
       let newFiles;
@@ -439,6 +461,14 @@ export default function PRDetailPage() {
               >
                 Conversations <span class="text-(--color-text-muted)">{conversationCount()}</span>
               </button>
+              <button
+                class={`flex-1 px-2 py-2 text-xs font-medium cursor-pointer transition-colors border-b-2 ${
+                  activeTab() === "semantic"
+                    ? "border-(--color-accent-emphasis) text-(--color-text-primary)"
+                    : "border-transparent text-(--color-text-muted) hover:text-(--color-text-secondary)"
+                }`}
+                onClick={() => setActiveTab("semantic")}
+              >Semantic</button>
             </div>
 
             {/* Panel content */}
@@ -472,6 +502,22 @@ export default function PRDetailPage() {
                   onSelectThread={handleSelectThread}
                   activeThreadId={scrollToThreadId()}
                 />
+              </Show>
+              <Show when={prDetailStore.pr}>
+                {(pr) => <div class={activeTab() === "semantic" ? "h-full" : "hidden"}>
+                  <SemanticSearchPanel
+                    owner={params.owner}
+                    repo={params.repo}
+                    pr={pr()}
+                    files={prDetailStore.files}
+                    selection={prDetailStore.commitSelection}
+                    filesLoading={commitFilesLoading()}
+                    active={activeTab() === "semantic"}
+                    onSelect={handleSelectSemanticHit}
+                    onShowKey={() => setActiveTab("files")}
+                    onInvalidate={() => setSemanticTarget(null)}
+                  />
+                </div>}
               </Show>
             </div>
           </div>
@@ -577,6 +623,7 @@ export default function PRDetailPage() {
                       isCollapsed={collapsedFiles().has(file.filename)}
                       onToggleCollapsed={() => toggleFileCollapsed(file.filename)}
                       isReviewed={prDetailStore.isFileReviewed(file.filename)}
+                      semanticAnchor={semanticTarget()?.filename === file.filename ? semanticTarget()?.anchor : null}
                       onToggleReviewed={() => handleToggleReviewed(file.filename)}
                     />
                   )}
