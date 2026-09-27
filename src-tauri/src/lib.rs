@@ -3,15 +3,24 @@ mod commands;
 mod diff;
 mod highlight;
 mod keyring;
+mod oauth;
 mod provider;
 
 use cache::Cache;
 use provider::GitProvider;
+use std::sync::{atomic::AtomicBool, Arc};
 use tokio::sync::{Mutex, RwLock};
+
+pub struct PendingLogin {
+    pub login: oauth::DeviceLogin,
+    pub cancelled: Arc<AtomicBool>,
+    pub polling: bool,
+}
 
 pub struct AppState {
     pub provider: RwLock<Option<Box<dyn GitProvider>>>,
     pub cache: Mutex<Cache>,
+    pub pending_login: Mutex<Option<PendingLogin>>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -21,14 +30,16 @@ pub fn run() {
     let state = AppState {
         provider: RwLock::new(None),
         cache: Mutex::new(cache),
+        pending_login: Mutex::new(None),
     };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
-            commands::auth::get_stored_token,
-            commands::auth::validate_and_store_token,
+            commands::auth::start_github_login,
+            commands::auth::wait_for_github_login,
+            commands::auth::cancel_github_login,
             commands::auth::logout,
             commands::auth::restore_session,
             commands::repos::get_saved_repos,

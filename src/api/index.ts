@@ -1,4 +1,5 @@
-export { getStoredToken, validateAndStoreToken, logout, restoreSession } from "./auth";
+export { startGithubLogin, waitForGithubLogin, cancelGithubLogin, logout, restoreSession } from "./auth";
+export type { DeviceLoginInfo } from "./auth";
 export { getSavedRepos, saveRepo, removeRepo, listUserRepos, searchRepos } from "./repos";
 export type { RepoInfo } from "./repos";
 export { listPullRequests, getPullRequest, searchPullRequests, listRepoLabels, getRateLimit } from "./pull-requests";
