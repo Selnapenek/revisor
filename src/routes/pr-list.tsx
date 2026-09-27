@@ -73,6 +73,7 @@ export default function PRListPage() {
     reposStore.setCurrentRepo({ owner: params.owner, repo: params.repo });
 
     prListStore.setRepoKey(currentKey);
+    prFiltersStore.loadForRepository(currentKey);
 
     if (hasCachedData) {
       fetchPrs(1, false, true);

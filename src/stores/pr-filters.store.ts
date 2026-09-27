@@ -1,7 +1,8 @@
-import { createSignal, createMemo } from "solid-js";
+import { batch, createSignal, createMemo } from "solid-js";
 import type { Label, PrUser, PullRequest, PrSearchFilters } from "~/types/pr";
 import { listRepoLabels } from "~/api";
 import { withAuthorPreset, withReviewRequestedPreset } from "~/lib/pr-filter-presets";
+import { loadRepositoryFilters, saveRepositoryFilters } from "~/lib/pr-filter-persistence";
 
 const [selectedAuthors, setSelectedAuthors] = createSignal<string[]>([]);
 const [selectedLabels, setSelectedLabels] = createSignal<string[]>([]);
@@ -12,6 +13,16 @@ const [availableLabels, setAvailableLabels] = createSignal<Label[]>([]);
 const [knownAuthors, setKnownAuthors] = createSignal<PrUser[]>([]);
 const [knownAssignees, setKnownAssignees] = createSignal<PrUser[]>([]);
 const [isLoadingLabels, setIsLoadingLabels] = createSignal(false);
+let activeRepositoryKey: string | null = null;
+
+function persistActiveFilters() {
+  if (!activeRepositoryKey) return;
+  try {
+    saveRepositoryFilters(localStorage, activeRepositoryKey, activeFilters());
+  } catch {
+    // localStorage may not be available in the current environment.
+  }
+}
 
 const hasActiveFilters = createMemo(() =>
   selectedAuthors().length > 0 ||
@@ -67,21 +78,27 @@ export const prFiltersStore = {
 
   toggleAuthor(login: string) {
     setSelectedAuthors((prev) => toggleValue(prev, login));
+    persistActiveFilters();
   },
   toggleLabel(name: string) {
     setSelectedLabels((prev) => toggleValue(prev, name));
+    persistActiveFilters();
   },
   toggleAssignee(login: string) {
     setSelectedAssignees((prev) => toggleValue(prev, login));
+    persistActiveFilters();
   },
   setReviewStatus(status: string | null) {
     setSelectedReviewStatus((prev) => prev === status ? null : status);
+    persistActiveFilters();
   },
   applyAuthorPreset(login: string) {
     setSelectedAuthors(withAuthorPreset(activeFilters(), login).authors);
+    persistActiveFilters();
   },
   applyNeedsReviewPreset() {
     setSelectedReviewStatus(withReviewRequestedPreset(activeFilters()).review_status);
+    persistActiveFilters();
   },
 
   async fetchLabels(owner: string, repo: string) {
@@ -109,13 +126,33 @@ export const prFiltersStore = {
   },
 
   clearAll() {
-    setSelectedAuthors([]);
-    setSelectedLabels([]);
-    setSelectedAssignees([]);
-    setSelectedReviewStatus(null);
+    batch(() => {
+      setSelectedAuthors([]);
+      setSelectedLabels([]);
+      setSelectedAssignees([]);
+      setSelectedReviewStatus(null);
+    });
+    persistActiveFilters();
+  },
+
+  loadForRepository(repositoryKey: string) {
+    activeRepositoryKey = repositoryKey;
+    let filters: PrSearchFilters;
+    try {
+      filters = loadRepositoryFilters(localStorage, repositoryKey);
+    } catch {
+      filters = { authors: [], labels: [], assignees: [], review_status: null };
+    }
+    batch(() => {
+      setSelectedAuthors(filters.authors);
+      setSelectedLabels(filters.labels);
+      setSelectedAssignees(filters.assignees);
+      setSelectedReviewStatus(filters.review_status);
+    });
   },
 
   reset() {
+    activeRepositoryKey = null;
     setSelectedAuthors([]);
     setSelectedLabels([]);
     setSelectedAssignees([]);
