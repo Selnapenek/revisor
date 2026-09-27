@@ -12,6 +12,8 @@ import { prDetailStore, uiStore } from "~/stores";
 import { searchStore } from "~/stores/search.store";
 import { buildThreads } from "~/lib/comments";
 import { FileTree } from "~/components/file-tree/FileTree";
+import { FocusPanel } from "~/components/file-tree/FocusPanel";
+import { isLatestFocusRequest } from "~/lib/focus-files";
 import { ConversationList } from "~/components/conversations/ConversationList";
 import { DiffViewer } from "~/components/diff/DiffViewer";
 import { CodeSearchBar } from "~/components/diff/CodeSearchBar";
@@ -273,6 +275,18 @@ export default function PRDetailPage() {
     }
   };
 
+  const handleSelectFocusFile = (path: string) => {
+    searchStore.setFileFilterQuery("");
+    searchStore.setIncludePattern("");
+    searchStore.setExcludePattern("");
+    prDetailStore.setSelectedFilePath(path);
+    expandFile(path);
+    requestAnimationFrame(() => {
+      const el = scrollContainerRef?.querySelector(`[data-file-section="${CSS.escape(path)}"]`);
+      el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  };
+
   const handleSelectThread = (filePath: string, threadId: number) => {
     prDetailStore.setSelectedFilePath(filePath);
     expandFile(filePath);
@@ -285,6 +299,8 @@ export default function PRDetailPage() {
 
   // Cache the full PR files so we can restore them without re-fetching
   let allPrFiles: typeof prDetailStore.files | null = null;
+  let fileRequestId = 0;
+  const [commitFilesLoading, setCommitFilesLoading] = createSignal(false);
 
   const handleCommitSelectionChange = async (selection: CommitSelection) => {
     // Cache full PR files before first commit-scoped selection
@@ -292,6 +308,8 @@ export default function PRDetailPage() {
       allPrFiles = prDetailStore.files;
     }
 
+    const requestId = ++fileRequestId;
+    setCommitFilesLoading(true);
     prDetailStore.setCommitSelection(selection);
 
     try {
@@ -323,6 +341,7 @@ export default function PRDetailPage() {
         newFiles = await getCompareFiles(params.owner, params.repo, base, head);
       }
 
+      if (!isLatestFocusRequest(requestId, fileRequestId)) return;
       prDetailStore.setFiles(newFiles);
 
       // Auto-select first file in new set
@@ -332,7 +351,11 @@ export default function PRDetailPage() {
         prDetailStore.setSelectedFilePath(null);
       }
     } catch (err) {
-      uiStore.showError(`Failed to load commit files: ${err}`);
+      if (isLatestFocusRequest(requestId, fileRequestId)) {
+        uiStore.showError(`Failed to load commit files: ${err}`);
+      }
+    } finally {
+      if (isLatestFocusRequest(requestId, fileRequestId)) setCommitFilesLoading(false);
     }
   };
 
@@ -421,13 +444,28 @@ export default function PRDetailPage() {
             {/* Panel content */}
             <div class="flex-1 overflow-hidden">
               <Show when={activeTab() === "files"}>
-                <FileTree
-                  files={searchStore.filteredFiles}
-                  selectedPath={prDetailStore.selectedFilePath}
-                  onSelect={handleSelectFile}
-                  onToggleReviewed={handleToggleReviewed}
-                  fileFilterRef={(el) => { fileFilterRef = el; }}
-                />
+                <div class="h-full flex flex-col">
+                  <Show when={prDetailStore.pr}>
+                    {(pr) => <FocusPanel
+                      owner={params.owner}
+                      repo={params.repo}
+                      pr={pr()}
+                      files={prDetailStore.files}
+                      selection={prDetailStore.commitSelection}
+                      filesLoading={commitFilesLoading()}
+                      onSelectFile={handleSelectFocusFile}
+                    />}
+                  </Show>
+                  <div class="flex-1 min-h-0">
+                    <FileTree
+                      files={searchStore.filteredFiles}
+                      selectedPath={prDetailStore.selectedFilePath}
+                      onSelect={handleSelectFile}
+                      onToggleReviewed={handleToggleReviewed}
+                      fileFilterRef={(el) => { fileFilterRef = el; }}
+                    />
+                  </div>
+                </div>
               </Show>
               <Show when={activeTab() === "conversations"}>
                 <ConversationList
