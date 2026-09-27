@@ -1,6 +1,7 @@
 import { createSignal, createMemo } from "solid-js";
 import type { Label, PrUser, PullRequest, PrSearchFilters } from "~/types/pr";
 import { listRepoLabels } from "~/api";
+import { withAuthorPreset, withReviewRequestedPreset } from "~/lib/pr-filter-presets";
 
 const [selectedAuthors, setSelectedAuthors] = createSignal<string[]>([]);
 const [selectedLabels, setSelectedLabels] = createSignal<string[]>([]);
@@ -75,6 +76,12 @@ export const prFiltersStore = {
   },
   setReviewStatus(status: string | null) {
     setSelectedReviewStatus((prev) => prev === status ? null : status);
+  },
+  applyAuthorPreset(login: string) {
+    setSelectedAuthors(withAuthorPreset(activeFilters(), login).authors);
+  },
+  applyNeedsReviewPreset() {
+    setSelectedReviewStatus(withReviewRequestedPreset(activeFilters()).review_status);
   },
 
   async fetchLabels(owner: string, repo: string) {

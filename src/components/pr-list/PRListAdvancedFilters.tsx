@@ -1,16 +1,18 @@
 import { Show } from "solid-js";
-import { prFiltersStore } from "~/stores";
+import { authStore, prFiltersStore } from "~/stores";
 import { FilterDropdown } from "./FilterDropdown";
 import { ReviewStatusDropdown } from "./ReviewStatusDropdown";
 import type { FilterOption } from "./FilterDropdown";
 
 export function PRListAdvancedFilters() {
-  const authorOptions = (): FilterOption[] =>
-    prFiltersStore.knownAuthors.map((u) => ({
-      value: u.login,
-      label: u.login,
-      avatar: u.avatar_url,
-    }));
+  const authorOptions = (): FilterOption[] => {
+    const users = prFiltersStore.knownAuthors;
+    const me = authStore.user;
+    return me && !users.some((u) => u.login === me.login)
+      ? [...users, { login: me.login, avatar_url: me.avatar_url }]
+          .map((u) => ({ value: u.login, label: u.login, avatar: u.avatar_url }))
+      : users.map((u) => ({ value: u.login, label: u.login, avatar: u.avatar_url }));
+  };
 
   const labelOptions = (): FilterOption[] =>
     prFiltersStore.availableLabels.map((l) => ({
@@ -27,7 +29,21 @@ export function PRListAdvancedFilters() {
     }));
 
   return (
-    <div class="flex items-center gap-2 px-4 py-2 border-b border-(--color-border-muted) bg-(--color-bg-primary)">
+    <div class="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-(--color-border-muted) bg-(--color-bg-primary)">
+      <button
+        class="px-2 py-1 text-xs rounded border border-(--color-border-muted) hover:bg-(--color-bg-secondary) transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+        disabled={!authStore.user}
+        onClick={() => authStore.user && prFiltersStore.applyAuthorPreset(authStore.user.login)}
+      >
+        Authored by me
+      </button>
+      <button
+        class="px-2 py-1 text-xs rounded border border-(--color-border-muted) hover:bg-(--color-bg-secondary) transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+        disabled={!authStore.user}
+        onClick={() => prFiltersStore.applyNeedsReviewPreset()}
+      >
+        Needs review from me
+      </button>
       <FilterDropdown
         label="Author"
         options={authorOptions()}
