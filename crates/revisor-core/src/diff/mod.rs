@@ -1,4 +1,6 @@
+pub mod expand;
 pub mod parser;
+pub mod search;
 pub mod side_by_side;
 pub mod word_diff;
 

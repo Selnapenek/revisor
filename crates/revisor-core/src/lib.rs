@@ -1,13 +1,17 @@
 pub mod auth;
 pub mod cache;
+pub mod comments;
 pub mod diff;
+pub mod files;
 pub mod focus;
 pub mod keyring;
 pub mod oauth;
+pub mod pr_filters;
 pub mod provider;
 pub mod rank_findings;
 pub mod semantic;
 pub mod source_snapshot;
+pub mod time;
 
 use cache::Cache;
 use provider::GitProvider;

@@ -1,0 +1,13 @@
+[package]
+name = "revisor-app"
+version = "1.0.0"
+edition = "2021"
+
+[[bin]]
+name = "revisor"
+path = "src/main.rs"
+
+[dependencies]
+revisor-core = { path = "../revisor-core" }
+gpui-kit = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread"] }
