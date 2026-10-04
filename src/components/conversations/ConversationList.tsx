@@ -17,6 +17,7 @@ type TimelineEntry =
 interface ConversationListProps {
   onSelectThread: (filePath: string, threadId: number) => void;
   activeThreadId: number | null;
+  onValidateThread?: (thread: CommentThread) => void;
 }
 
 export function ConversationList(props: ConversationListProps) {
@@ -176,6 +177,7 @@ export function ConversationList(props: ConversationListProps) {
                     return (
                       <ConversationItem
                         thread={threadEntry.thread}
+                        onValidate={props.onValidateThread ? () => props.onValidateThread?.(threadEntry.thread) : undefined}
                         isActive={props.activeThreadId === threadEntry.thread.root.id}
                         onClick={() =>
                           props.onSelectThread(threadEntry.thread.root.path, threadEntry.thread.root.id)

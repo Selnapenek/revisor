@@ -6,6 +6,7 @@ interface ConversationItemProps {
   thread: CommentThread;
   isActive: boolean;
   onClick: () => void;
+  onValidate?: () => void;
 }
 
 function stripMarkdown(text: string): string {
@@ -76,6 +77,8 @@ export function ConversationItem(props: ConversationItemProps) {
           L{props.thread.line}
         </span>
       </div>
+
+      <Show when={props.onValidate}><button class="text-[10px] text-(--color-accent-fg) hover:underline" onClick={(event) => { event.stopPropagation(); props.onValidate?.(); }}>Validate this comment</button></Show>
 
       {/* Row 3: Body preview */}
       <p class="text-xs text-(--color-text-secondary) line-clamp-2 leading-snug">

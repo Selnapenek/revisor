@@ -25,3 +25,5 @@ dirs = "6"
 similar = "2"
 rmp-serde = "1"
 chrono = { version = "0.4", features = ["serde"] }
+flate2 = "1"
+tar = "0.4"

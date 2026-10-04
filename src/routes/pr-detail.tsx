@@ -17,6 +17,9 @@ import { SemanticSearchPanel } from "~/components/diff/SemanticSearchPanel";
 import { semanticAnchor, type SemanticHit, type SemanticAnchor } from "~/lib/semantic-search";
 import { isLatestFocusRequest } from "~/lib/focus-files";
 import { ConversationList } from "~/components/conversations/ConversationList";
+import { FindingsPanel } from "~/components/conversations/FindingsPanel";
+import { CommentValidationPanel } from "~/components/conversations/CommentValidationPanel";
+import type { CommentThread } from "~/lib/comments";
 import { DiffViewer } from "~/components/diff/DiffViewer";
 import { CodeSearchBar } from "~/components/diff/CodeSearchBar";
 import { Button } from "~/components/ui/Button";
@@ -55,6 +58,8 @@ export default function PRDetailPage() {
   const prNumber = () => parseInt(params.number, 10);
   const [activeTab, setActiveTab] = createSignal<"files" | "conversations" | "semantic">("files");
   const [scrollToThreadId, setScrollToThreadId] = createSignal<number | null>(null);
+  const [conversationMode, setConversationMode] = createSignal<"timeline" | "findings" | "validate">("timeline");
+  const [validationThread, setValidationThread] = createSignal<CommentThread | null>(null);
   const [semanticTarget, setSemanticTarget] = createSignal<{ filename: string; anchor: SemanticAnchor } | null>(null);
   const [sidebarWidth, setSidebarWidth] = createSignal(readPersistedWidth() ?? SIDEBAR_DEFAULT);
   const [isResizing, setIsResizing] = createSignal(false);
@@ -308,7 +313,12 @@ export default function PRDetailPage() {
     }));
   };
 
+  const handleValidateThread = (thread: CommentThread) => { setValidationThread(thread); setConversationMode("validate"); };
+
   const handleSelectThread = (filePath: string, threadId: number) => {
+    searchStore.setFileFilterQuery("");
+    searchStore.setIncludePattern("");
+    searchStore.setExcludePattern("");
     prDetailStore.setSelectedFilePath(filePath);
     expandFile(filePath);
     setScrollToThreadId(threadId);
@@ -497,11 +507,30 @@ export default function PRDetailPage() {
                   </div>
                 </div>
               </Show>
-              <Show when={activeTab() === "conversations"}>
-                <ConversationList
-                  onSelectThread={handleSelectThread}
-                  activeThreadId={scrollToThreadId()}
-                />
+              <Show when={prDetailStore.pr}>
+                {(pr) => <div class={activeTab() === "conversations" ? "h-full flex flex-col" : "hidden"}>
+                  <div class="flex border-b border-(--color-border-muted)">
+                    <button class={`flex-1 py-1.5 text-xs ${conversationMode() === "timeline" ? "text-(--color-text-primary)" : "text-(--color-text-muted)"}`} onClick={() => setConversationMode("timeline")}>Timeline</button>
+                    <button class={`flex-1 py-1.5 text-xs ${conversationMode() === "validate" ? "text-(--color-text-primary)" : "text-(--color-text-muted)"}`} onClick={() => setConversationMode("validate")}>Validate</button>
+                    <button class={`flex-1 py-1.5 text-xs ${conversationMode() === "findings" ? "text-(--color-text-primary)" : "text-(--color-text-muted)"}`} onClick={() => setConversationMode("findings")}>Findings</button>
+                  </div>
+                  <div class="flex-1 min-h-0">
+                    <div class={conversationMode() === "timeline" ? "h-full" : "hidden"}>
+                      <ConversationList onSelectThread={handleSelectThread} onValidateThread={handleValidateThread} activeThreadId={scrollToThreadId()} />
+                    </div>
+                    <div class={conversationMode() === "validate" ? "h-full" : "hidden"}>
+                      <Show when={validationThread()} fallback={<p class="p-3 text-xs">Select Validate this comment in the timeline.</p>}>{(thread) => <CommentValidationPanel owner={params.owner} repo={params.repo} pr={pr()} thread={thread()} selection={prDetailStore.commitSelection} files={prDetailStore.files} active={activeTab() === "conversations" && conversationMode() === "validate"} onShowKey={() => setActiveTab("files")} />}</Show>
+                    </div>
+                    <div class={conversationMode() === "findings" ? "h-full" : "hidden"}>
+                      <FindingsPanel owner={params.owner} repo={params.repo} pr={pr()}
+                        files={prDetailStore.files} selection={prDetailStore.commitSelection}
+                        filesLoading={commitFilesLoading() || prDetailStore.isLoadingFiles}
+                        commentsLoading={prDetailStore.isLoadingComments}
+                        active={activeTab() === "conversations" && conversationMode() === "findings"}
+                        onSelectThread={handleSelectThread} onShowKey={() => setActiveTab("files")} />
+                    </div>
+                  </div>
+                </div>}
               </Show>
               <Show when={prDetailStore.pr}>
                 {(pr) => <div class={activeTab() === "semantic" ? "h-full" : "hidden"}>

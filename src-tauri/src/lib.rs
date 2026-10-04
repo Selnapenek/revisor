@@ -2,11 +2,13 @@ mod cache;
 mod commands;
 mod diff;
 mod focus;
-mod semantic;
 mod highlight;
 mod keyring;
 mod oauth;
 mod provider;
+mod rank_findings;
+mod semantic;
+mod source_snapshot;
 
 use cache::Cache;
 use provider::GitProvider;
@@ -64,6 +66,8 @@ pub fn run() {
             commands::focus::focus_remove_key,
             commands::focus::find_focus_files,
             commands::semantic::search_semantic_diff,
+            commands::rank_findings::rank_ai_findings,
+            commands::source_snapshot::get_pr_head_source_snapshot,
             commands::comments::get_pr_comments,
             commands::comments::get_issue_comments,
             commands::comments::get_pr_reviews,
