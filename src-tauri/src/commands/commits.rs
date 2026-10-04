@@ -1,4 +1,4 @@
-use crate::commands::files::{process_pr_files, ProcessedFile};
+use crate::diff::{process_pr_files, ProcessedFile};
 use crate::provider::types::Commit;
 use crate::AppState;
 use tauri::State;

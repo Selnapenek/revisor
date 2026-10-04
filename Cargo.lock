@@ -3049,6 +3049,17 @@ dependencies = [
 name = "revisor"
 version = "1.0.0"
 dependencies = [
+ "revisor-core",
+ "serde",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-shell",
+]
+
+[[package]]
+name = "revisor-core"
+version = "1.0.0"
+dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
@@ -3062,9 +3073,6 @@ dependencies = [
  "serde_json",
  "similar",
  "tar",
- "tauri",
- "tauri-build",
- "tauri-plugin-shell",
  "tokio",
 ]
 

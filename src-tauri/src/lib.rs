@@ -1,41 +1,12 @@
-mod cache;
 mod commands;
-mod diff;
-mod focus;
-mod highlight;
-mod keyring;
-mod oauth;
-mod provider;
-mod rank_findings;
-mod semantic;
-mod source_snapshot;
 
-use cache::Cache;
-use provider::GitProvider;
-use std::sync::{atomic::AtomicBool, Arc};
-use tokio::sync::{Mutex, RwLock};
-
-pub struct PendingLogin {
-    pub login: oauth::DeviceLogin,
-    pub cancelled: Arc<AtomicBool>,
-    pub polling: bool,
-}
-
-pub struct AppState {
-    pub provider: RwLock<Option<Box<dyn GitProvider>>>,
-    pub cache: Mutex<Cache>,
-    pub pending_login: Mutex<Option<PendingLogin>>,
-}
+pub use revisor_core::{
+    auth, cache, diff, focus, keyring, provider, rank_findings, semantic, source_snapshot, AppState,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let cache = Cache::open().expect("Failed to initialize database");
-
-    let state = AppState {
-        provider: RwLock::new(None),
-        cache: Mutex::new(cache),
-        pending_login: Mutex::new(None),
-    };
+    let state = AppState::open().expect("Failed to initialize database");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
