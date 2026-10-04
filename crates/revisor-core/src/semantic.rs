@@ -1,3 +1,6 @@
+use crate::diff::{parser::DiffLineKind, ProcessedFile};
+use crate::focus::kind_name;
+use crate::provider::types::PullRequest;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{cmp::Ordering, time::Duration};
@@ -370,6 +373,95 @@ async fn search_at(
     Ok(result)
 }
 
+/// Full-PR diff snapshot for `search`, keeping original hunk line numbers.
+pub fn snapshot_from(
+    owner: &str,
+    repo: &str,
+    pr: &PullRequest,
+    files: &[ProcessedFile],
+) -> SemanticSnapshot {
+    SemanticSnapshot {
+        owner: owner.into(),
+        repo: repo.into(),
+        number: pr.number,
+        base_sha: pr.base_sha.clone(),
+        head_sha: pr.head_sha.clone(),
+        files: files
+            .iter()
+            .map(|file| {
+                let diff = file.diff.as_ref();
+                SemanticFile {
+                    filename: file.filename.clone(),
+                    status: file.status.clone(),
+                    is_binary: diff.is_some_and(|d| d.is_binary),
+                    is_too_large: diff.is_some_and(|d| d.is_too_large),
+                    hunks: diff.map_or(vec![], |d| {
+                        d.hunks
+                            .iter()
+                            .map(|hunk| SemanticHunk {
+                                header: hunk.header.clone(),
+                                old_start: hunk.old_start,
+                                new_start: hunk.new_start,
+                                lines: hunk
+                                    .lines
+                                    .iter()
+                                    .map(|line| SemanticLine {
+                                        kind: kind_name(line.kind).into(),
+                                        content: line.content.clone(),
+                                        old_lineno: line.old_lineno,
+                                        new_lineno: line.new_lineno,
+                                    })
+                                    .collect(),
+                            })
+                            .collect()
+                    }),
+                }
+            })
+            .collect(),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorSide {
+    Old,
+    New,
+}
+
+/// Diff line to highlight for a hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SemanticAnchor {
+    pub side: AnchorSide,
+    pub line: u64,
+}
+
+/// First added line of the hunk, else its first removed line.
+pub fn anchor(file: &ProcessedFile, hunk_index: usize) -> Option<SemanticAnchor> {
+    let lines = &file.diff.as_ref()?.hunks.get(hunk_index)?.lines;
+    let first = |kind, side| {
+        lines.iter().find_map(|line| {
+            let line_no = match side {
+                AnchorSide::Old => line.old_lineno,
+                AnchorSide::New => line.new_lineno,
+            };
+            (line.kind == kind)
+                .then_some(line_no)
+                .flatten()
+                .map(|line| SemanticAnchor { side, line })
+        })
+    };
+    first(DiffLineKind::Added, AnchorSide::New)
+        .or_else(|| first(DiffLineKind::Removed, AnchorSide::Old))
+}
+
+/// "none", "9" or "5–6" for a hunk's original line span.
+pub fn line_range(start: u64, count: u64) -> String {
+    match count {
+        0 => "none".into(),
+        1 => start.to_string(),
+        _ => format!("{start}–{}", start + count - 1),
+    }
+}
+
 #[cfg(test)]
 impl SemanticHit {
     fn new(filename: &str, hunk_index: usize, score: f64, confidence: f64) -> Self {
@@ -581,5 +673,84 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    fn processed() -> ProcessedFile {
+        serde_json::from_value(json!({
+            "sha": "blob", "filename": "src/auth.ts", "status": "modified", "additions": 1, "deletions": 1,
+            "diff": {"is_binary": false, "is_too_large": false, "side_by_side": [], "word_diffs": [], "hunks": [
+                {"header": "@@ -5,2 +5,2 @@", "old_start": 5, "old_count": 2, "new_start": 5, "new_count": 2, "lines": [
+                    {"kind": "removed", "content": "old", "old_lineno": 5, "new_lineno": null},
+                    {"kind": "added", "content": "new", "old_lineno": null, "new_lineno": 5},
+                ]},
+                {"header": "@@ -9 +8,0 @@", "old_start": 9, "old_count": 1, "new_start": 8, "new_count": 0, "lines": [
+                    {"kind": "removed", "content": "removed", "old_lineno": 9, "new_lineno": null},
+                ]},
+            ]},
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn snapshot_from_keeps_original_hunk_line_numbers() {
+        let pr = crate::focus::test_pr(4, "base", "head");
+        let snapshot = snapshot_from("org", "repo", &pr, &[processed()]);
+        assert_eq!(snapshot.head_sha, "head");
+        let hunks = &snapshot.files[0].hunks;
+        assert_eq!(hunks.len(), 2);
+        assert_eq!(
+            (
+                hunks[0].header.as_str(),
+                hunks[0].old_start,
+                hunks[0].new_start
+            ),
+            ("@@ -5,2 +5,2 @@", 5, 5)
+        );
+        let lines: Vec<_> = hunks[0]
+            .lines
+            .iter()
+            .map(|l| {
+                (
+                    l.kind.as_str(),
+                    l.content.as_str(),
+                    l.old_lineno,
+                    l.new_lineno,
+                )
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                ("removed", "old", Some(5), None),
+                ("added", "new", None, Some(5))
+            ]
+        );
+    }
+
+    #[test]
+    fn anchor_prefers_added_line_and_supports_deletion_only_hunk() {
+        let file = processed();
+        assert_eq!(
+            anchor(&file, 0),
+            Some(SemanticAnchor {
+                side: AnchorSide::New,
+                line: 5
+            })
+        );
+        assert_eq!(
+            anchor(&file, 1),
+            Some(SemanticAnchor {
+                side: AnchorSide::Old,
+                line: 9
+            })
+        );
+        assert_eq!(anchor(&file, 3), None);
+    }
+
+    #[test]
+    fn line_range_formats_original_spans() {
+        assert_eq!(line_range(5, 2), "5–6");
+        assert_eq!(line_range(9, 1), "9");
+        assert_eq!(line_range(8, 0), "none");
     }
 }

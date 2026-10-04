@@ -1,5 +1,8 @@
+use crate::diff::{parser::DiffLineKind, ProcessedFile};
+use crate::provider::types::{PullRequest, ReviewComment, ThreadResolutionInfo};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::time::Duration;
 use tokio::task::JoinSet;
 
@@ -40,6 +43,10 @@ pub struct Finding {
     pub line: u64,
     pub body: String,
     pub replies: Vec<String>,
+    #[serde(default)]
+    pub html_url: String,
+    #[serde(default)]
+    pub author: String,
 }
 
 #[derive(Serialize)]
@@ -338,6 +345,168 @@ async fn rank_at(
     Ok(result)
 }
 
+fn is_root(comment: &ReviewComment, ids: &HashSet<u64>) -> bool {
+    comment
+        .in_reply_to_id
+        .map_or(true, |parent| !ids.contains(&parent))
+}
+
+/// Open, current, non-empty inline threads started by `authors`, ordered by line.
+pub fn select_findings(
+    comments: &[ReviewComment],
+    resolutions: &[ThreadResolutionInfo],
+    authors: &[String],
+) -> Vec<Finding> {
+    let ids: HashSet<u64> = comments.iter().map(|c| c.id).collect();
+    let mut findings: Vec<Finding> = comments
+        .iter()
+        .filter(|c| {
+            is_root(c, &ids)
+                && authors.contains(&c.author_login)
+                && !c.outdated
+                && !c.body.trim().is_empty()
+                && !resolutions
+                    .iter()
+                    .any(|r| r.root_comment_id == c.id && r.is_resolved)
+        })
+        .filter_map(|root| {
+            let line = if root.side.as_deref() == Some("LEFT") {
+                root.original_line
+            } else {
+                root.line
+            }?;
+            let mut replies: Vec<&ReviewComment> = comments
+                .iter()
+                .filter(|c| c.in_reply_to_id == Some(root.id))
+                .collect();
+            replies.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+            Some(Finding {
+                id: root.id,
+                path: root.path.clone(),
+                line,
+                body: root.body.clone(),
+                replies: replies.iter().map(|r| r.body.clone()).collect(),
+                html_url: root.html_url.clone(),
+                author: root.author_login.clone(),
+            })
+        })
+        .collect();
+    findings.sort_by_key(|f| f.line);
+    findings
+}
+
+/// Threads by `authors` that `select_findings` leaves out (resolved, outdated, empty, file-level).
+pub fn count_excluded_findings(
+    comments: &[ReviewComment],
+    resolutions: &[ThreadResolutionInfo],
+    authors: &[String],
+) -> usize {
+    let ids: HashSet<u64> = comments.iter().map(|c| c.id).collect();
+    let roots = comments
+        .iter()
+        .filter(|c| authors.contains(&c.author_login) && is_root(c, &ids))
+        .count();
+    roots - select_findings(comments, resolutions, authors).len()
+}
+
+/// Support shown to the user: low-confidence answers count as insufficient context.
+pub fn effective_support(item: &RankedFinding) -> &str {
+    if item.confidence < 0.6 {
+        "insufficient_context"
+    } else {
+        &item.support
+    }
+}
+
+/// Orders by impact weighted by effective support, then impact, then id.
+pub fn rank_findings(items: &mut [RankedFinding]) {
+    let score = |item: &RankedFinding| {
+        item.impact
+            * match effective_support(item) {
+                "supported" => 1.0,
+                "insufficient_context" => 0.5,
+                _ => 0.0,
+            }
+    };
+    items.sort_by(|a, b| {
+        score(b)
+            .total_cmp(&score(a))
+            .then(b.impact.total_cmp(&a.impact))
+            .then(a.id.cmp(&b.id))
+    });
+}
+
+/// Ref whose full content gives context: base for removed files, head otherwise.
+pub fn ranking_revision<'a>(file: &ProcessedFile, pr: &'a PullRequest) -> &'a str {
+    if file.status == "removed" {
+        &pr.base_sha
+    } else {
+        &pr.head_sha
+    }
+}
+
+/// Why the changed files cannot be ranked, checked before fetching contents.
+pub fn files_error(files: &[ProcessedFile]) -> Option<&'static str> {
+    if files.is_empty() || files.len() > MAX_ITEMS {
+        return Some("Ranking needs 1 to 50 changed files.");
+    }
+    files
+        .iter()
+        .any(|f| {
+            f.diff
+                .as_ref()
+                .map_or(true, |d| d.is_binary || d.is_too_large)
+        })
+        .then_some("A changed file has no available text diff. Complete context is required.")
+}
+
+/// Context for one changed file; `content` is the file at `ranking_revision`.
+pub fn ranking_file(file: &ProcessedFile, pr: &PullRequest, content: String) -> RankingFile {
+    let diff = file
+        .diff
+        .iter()
+        .flat_map(|d| &d.hunks)
+        .map(|hunk| {
+            let lines = hunk.lines.iter().map(|line| {
+                let prefix = match line.kind {
+                    DiffLineKind::Added => '+',
+                    DiffLineKind::Removed => '-',
+                    DiffLineKind::Context => ' ',
+                };
+                format!("{prefix}{}", line.content)
+            });
+            format!("{}\n{}", hunk.header, lines.collect::<Vec<_>>().join("\n"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    RankingFile {
+        path: file.filename.clone(),
+        status: file.status.clone(),
+        content,
+        diff,
+        revision: ranking_revision(file, pr).into(),
+    }
+}
+
+pub fn snapshot_from(
+    owner: &str,
+    repo: &str,
+    pr: &PullRequest,
+    files: Vec<RankingFile>,
+    findings: Vec<Finding>,
+) -> RankingSnapshot {
+    RankingSnapshot {
+        owner: owner.into(),
+        repo: repo.into(),
+        number: pr.number,
+        base_sha: pr.base_sha.clone(),
+        head_sha: pr.head_sha.clone(),
+        files,
+        findings,
+        context_kind: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,6 +531,8 @@ mod tests {
                 line: 1,
                 body: "bug".into(),
                 replies: vec![],
+                html_url: String::new(),
+                author: String::new(),
             }],
         }
     }
@@ -401,6 +572,8 @@ mod tests {
             line: 1,
             body: "other".into(),
             replies: vec![],
+            html_url: String::new(),
+            author: String::new(),
         });
         assert!(validate(&input).is_err());
     }
@@ -453,6 +626,8 @@ mod tests {
             line: 1,
             body: "bug".into(),
             replies: vec![],
+            html_url: String::new(),
+            author: String::new(),
         });
         let result = rank_at(input, "key".into(), &url).await.unwrap();
         assert_eq!(result.ranked.len(), 1);
@@ -481,6 +656,8 @@ mod tests {
                 line: 1,
                 body: "bug".into(),
                 replies: vec![],
+                html_url: String::new(),
+                author: String::new(),
             })
             .collect();
         let result = rank_at(input, "key".into(), &url).await.unwrap();
@@ -500,6 +677,8 @@ mod tests {
                 line: 1,
                 body: "bug".into(),
                 replies: vec![],
+                html_url: String::new(),
+                author: String::new(),
             })
             .collect();
         let result = rank_at(input, "key".into(), &url).await.unwrap();
@@ -522,5 +701,100 @@ mod tests {
         let result = rank_at(snapshot(), "bad".into(), &url).await.unwrap();
         assert_eq!(result.failed.len(), 1);
         assert_eq!(result.error.as_deref(), Some("TypeSafe API key is invalid"));
+    }
+
+    fn comment(id: u64, author: &str) -> ReviewComment {
+        serde_json::from_value(json!({
+            "id": id, "path": "a.ts", "line": 3, "original_line": null, "side": "RIGHT", "diff_hunk": "@@",
+            "body": "bug", "author_login": author, "author_avatar": "", "created_at": "", "updated_at": "",
+            "in_reply_to_id": null, "review_id": null, "html_url": "", "outdated": false,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn selects_open_current_roots_from_selected_authors_with_replies() {
+        let mut reply = comment(2, "bot");
+        reply.in_reply_to_id = Some(1);
+        reply.body = "reply".into();
+        let mut outdated = comment(4, "bot");
+        outdated.outdated = true;
+        let mut file_level = comment(6, "bot");
+        file_level.line = None;
+        let resolved = [ThreadResolutionInfo {
+            root_comment_id: 3,
+            thread_node_id: "x".into(),
+            is_resolved: true,
+        }];
+        let authors = ["bot".to_string()];
+        let selected = select_findings(
+            &[
+                comment(1, "bot"),
+                reply.clone(),
+                comment(3, "bot"),
+                outdated.clone(),
+                comment(5, "human"),
+            ],
+            &resolved,
+            &authors,
+        );
+        assert_eq!(selected.iter().map(|f| f.id).collect::<Vec<_>>(), [1]);
+        assert_eq!(selected[0].replies, ["reply"]);
+        let comments = [
+            comment(1, "bot"),
+            reply,
+            comment(3, "bot"),
+            outdated,
+            file_level,
+        ];
+        assert_eq!(count_excluded_findings(&comments, &resolved, &authors), 3);
+    }
+
+    #[test]
+    fn ranks_by_impact_and_support_then_stable_id() {
+        let item = |id, impact, support: &str, confidence| RankedFinding {
+            id,
+            impact,
+            support: support.into(),
+            confidence,
+        };
+        let mut ranked = vec![
+            item(3, 3.0, "contradicted", 0.9),
+            item(2, 2.0, "supported", 0.8),
+            item(1, 3.0, "supported", 0.3),
+        ];
+        rank_findings(&mut ranked);
+        assert_eq!(ranked.iter().map(|x| x.id).collect::<Vec<_>>(), [2, 1, 3]);
+        assert_eq!(effective_support(&ranked[1]), "insufficient_context");
+    }
+
+    #[test]
+    fn full_file_context_uses_correct_revision_and_refuses_missing_diff() {
+        let pr = crate::focus::test_pr(1, "base", "head");
+        let mut file: ProcessedFile = serde_json::from_value(json!({
+            "sha": "", "filename": "a.ts", "status": "removed", "additions": 0, "deletions": 0, "diff": null,
+        }))
+        .unwrap();
+        assert_eq!(ranking_revision(&file, &pr), "base");
+        assert!(files_error(&[file.clone()])
+            .unwrap()
+            .contains("no available text diff"));
+        assert!(files_error(&vec![file.clone(); 51])
+            .unwrap()
+            .contains("50 changed files"));
+        file.status = "renamed".into();
+        assert_eq!(ranking_revision(&file, &pr), "head");
+        file.diff = serde_json::from_value(json!({"is_binary": false, "is_too_large": false, "side_by_side": [], "word_diffs": [],
+            "hunks": [{"header": "@@ -1 +1 @@", "old_start": 1, "old_count": 1, "new_start": 1, "new_count": 1, "lines": [
+                {"kind": "removed", "content": "a", "old_lineno": 1, "new_lineno": null},
+                {"kind": "added", "content": "b", "old_lineno": null, "new_lineno": 1},
+            ]}]}))
+        .unwrap();
+        assert_eq!(files_error(&[file.clone()]), None);
+        let context = ranking_file(&file, &pr, "b".into());
+        assert_eq!(
+            (context.diff.as_str(), context.revision.as_str()),
+            ("@@ -1 +1 @@\n-a\n+b", "head")
+        );
     }
 }

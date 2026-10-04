@@ -1,3 +1,5 @@
+use crate::diff::{parser::DiffLineKind, ProcessedFile};
+use crate::provider::types::PullRequest;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::cmp::Ordering;
@@ -340,6 +342,70 @@ async fn analyze_at(snapshot: FocusSnapshot, key: String, endpoint: &str) -> Foc
     result
 }
 
+pub(crate) fn kind_name(kind: DiffLineKind) -> &'static str {
+    match kind {
+        DiffLineKind::Added => "added",
+        DiffLineKind::Removed => "removed",
+        DiffLineKind::Context => "context",
+    }
+}
+
+/// Full-PR diff snapshot for `analyze`. A missing diff stays a file without hunks.
+pub fn snapshot_from(
+    owner: &str,
+    repo: &str,
+    pr: &PullRequest,
+    files: &[ProcessedFile],
+) -> FocusSnapshot {
+    FocusSnapshot {
+        owner: owner.into(),
+        repo: repo.into(),
+        number: pr.number,
+        base_sha: pr.base_sha.clone(),
+        head_sha: pr.head_sha.clone(),
+        files: files
+            .iter()
+            .map(|file| {
+                let diff = file.diff.as_ref();
+                FocusFile {
+                    filename: file.filename.clone(),
+                    status: file.status.clone(),
+                    is_binary: diff.is_some_and(|d| d.is_binary),
+                    is_too_large: diff.is_some_and(|d| d.is_too_large),
+                    hunks: diff.map_or(vec![], |d| {
+                        d.hunks
+                            .iter()
+                            .map(|hunk| FocusHunk {
+                                header: hunk.header.clone(),
+                                lines: hunk
+                                    .lines
+                                    .iter()
+                                    .map(|line| FocusLine {
+                                        kind: kind_name(line.kind).into(),
+                                        content: line.content.clone(),
+                                    })
+                                    .collect(),
+                            })
+                            .collect()
+                    }),
+                }
+            })
+            .collect(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_pr(number: u64, base: &str, head: &str) -> PullRequest {
+    serde_json::from_value(json!({
+        "id": 1, "number": number, "title": "", "body": null, "state": "open", "draft": false,
+        "author_login": "", "author_avatar": "", "labels": [], "created_at": "", "updated_at": "",
+        "merged_at": null, "comments_count": 0, "review_comments_count": 0, "additions": 0,
+        "deletions": 0, "changed_files": 0, "head_sha": head, "base_sha": base, "head_ref": "",
+        "base_ref": "", "html_url": "", "assignees": [], "requested_reviewers": [],
+    }))
+    .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -594,5 +660,56 @@ mod tests {
         assert_eq!(result.input_tokens, 10);
         assert_eq!(result.output_tokens, 2);
         assert_eq!(result.skipped.len(), 1);
+    }
+
+    #[test]
+    fn snapshot_from_sends_full_hunks_and_keeps_missing_diff_unavailable() {
+        let file: ProcessedFile = serde_json::from_value(json!({
+            "sha": "blob1", "filename": "src/login.ts", "status": "modified", "additions": 1, "deletions": 1,
+            "diff": {"hunks": [{"header": "@@ -1 +1 @@", "old_start": 1, "old_count": 1, "new_start": 1, "new_count": 1,
+                "lines": [
+                    {"kind": "removed", "content": "return false", "old_lineno": 1, "new_lineno": null},
+                    {"kind": "added", "content": "return true", "old_lineno": null, "new_lineno": 1},
+                ]}],
+                "side_by_side": [], "word_diffs": [], "is_binary": false, "is_too_large": false},
+        }))
+        .unwrap();
+        let mut missing = file.clone();
+        missing.diff = None;
+        let snapshot = snapshot_from(
+            "team",
+            "app",
+            &test_pr(21, "base1", "head1"),
+            &[file, missing],
+        );
+        assert_eq!(
+            (
+                snapshot.owner.as_str(),
+                snapshot.repo.as_str(),
+                snapshot.number
+            ),
+            ("team", "app", 21)
+        );
+        assert_eq!(
+            (snapshot.base_sha.as_str(), snapshot.head_sha.as_str()),
+            ("base1", "head1")
+        );
+        let hunk = &snapshot.files[0].hunks[0];
+        assert_eq!(hunk.header, "@@ -1 +1 @@");
+        let lines: Vec<_> = hunk
+            .lines
+            .iter()
+            .map(|l| (l.kind.as_str(), l.content.as_str()))
+            .collect();
+        assert_eq!(
+            lines,
+            [("removed", "return false"), ("added", "return true")]
+        );
+        assert!(build_request(&snapshot.files[0]).state["diff"]
+            .as_str()
+            .unwrap()
+            .ends_with("-return false\n+return true"));
+        let missing = &snapshot.files[1];
+        assert!(missing.hunks.is_empty() && !missing.is_binary && !missing.is_too_large);
     }
 }
