@@ -15,6 +15,7 @@ fn main() {
             gpui_kit::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
             backend::init(cx);
+            screens::pr_detail::init(cx);
 
             cx.on_action(|_: &Quit, cx| cx.quit());
             cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);

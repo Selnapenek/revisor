@@ -88,21 +88,18 @@ fn match_toks(toks: &[Tok], s: &[char]) -> bool {
     }
 }
 
-/// Sidebar filter: case-insensitive substring `query`, then include / exclude glob fields.
-pub fn filter_files<'a>(
-    files: &'a [ProcessedFile],
-    query: &str,
-    include: &str,
-    exclude: &str,
-) -> Vec<&'a ProcessedFile> {
+/// Sidebar filter: indexes of `files` matching case-insensitive substring `query` and the include / exclude glob fields.
+pub fn filter_files(files: &[ProcessedFile], query: &str, include: &str, exclude: &str) -> Vec<usize> {
     let q = query.to_lowercase();
     let inc = GlobMatcher::new(include);
     let exc = GlobMatcher::new(exclude);
-    files
-        .iter()
-        .filter(|f| q.is_empty() || f.filename.to_lowercase().contains(&q))
-        .filter(|f| inc.as_ref().is_none_or(|m| m.is_match(&f.filename)))
-        .filter(|f| exc.as_ref().is_none_or(|m| !m.is_match(&f.filename)))
+    (0..files.len())
+        .filter(|&i| {
+            let name = &files[i].filename;
+            (q.is_empty() || name.to_lowercase().contains(&q))
+                && inc.as_ref().is_none_or(|m| m.is_match(name))
+                && exc.as_ref().is_none_or(|m| !m.is_match(name))
+        })
         .collect()
 }
 
@@ -312,8 +309,8 @@ mod tests {
         }
     }
 
-    fn names<'a>(files: &[&'a ProcessedFile]) -> Vec<&'a str> {
-        files.iter().map(|f| f.filename.as_str()).collect()
+    fn names(files: &[ProcessedFile], picked: &[usize]) -> Vec<String> {
+        picked.iter().map(|&i| files[i].filename.clone()).collect()
     }
 
     #[test]
@@ -321,10 +318,10 @@ mod tests {
         let files: Vec<_> =
             ["src/App.tsx", "src/lib/glob.ts", "src/lib/glob.test.ts", "README.md"].map(pf).into();
         assert_eq!(filter_files(&files, "", "", "").len(), 4);
-        assert_eq!(names(&filter_files(&files, "GLOB", "", "")), ["src/lib/glob.ts", "src/lib/glob.test.ts"]);
-        assert_eq!(names(&filter_files(&files, "", "*.ts,*.tsx", "*.test.ts")), ["src/App.tsx", "src/lib/glob.ts"]);
-        assert_eq!(names(&filter_files(&files, "lib", "", "*.test.ts")), ["src/lib/glob.ts"]);
-        assert_eq!(names(&filter_files(&files, "", " ", "src/**")), ["README.md"]);
+        assert_eq!(names(&files, &filter_files(&files, "GLOB", "", "")), ["src/lib/glob.ts", "src/lib/glob.test.ts"]);
+        assert_eq!(names(&files, &filter_files(&files, "", "*.ts,*.tsx", "*.test.ts")), ["src/App.tsx", "src/lib/glob.ts"]);
+        assert_eq!(names(&files, &filter_files(&files, "lib", "", "*.test.ts")), ["src/lib/glob.ts"]);
+        assert_eq!(names(&files, &filter_files(&files, "", " ", "src/**")), ["README.md"]);
     }
 
     #[test]
