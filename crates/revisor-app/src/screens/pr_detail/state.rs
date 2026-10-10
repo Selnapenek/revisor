@@ -459,6 +459,27 @@ impl PrModel {
         }
         None
     }
+
+    pub fn resolutions(&self) -> &[ThreadResolutionInfo] {
+        &self.resolutions
+    }
+
+    /// Head commit of the current commit selection.
+    pub fn head_sha(&self) -> Option<&str> {
+        match self.selection {
+            CommitSelection::All => self.pr.as_ref().map(|pr| pr.head_sha.as_str()),
+            CommitSelection::Single(i) | CommitSelection::Range(_, i) => self.commits.get(i).map(|c| c.sha.as_str()),
+        }
+    }
+
+    /// Cached lines of `path` at `git_ref`, without fetching.
+    pub fn cached_file_lines(&self, path: &str, git_ref: &str) -> Option<Arc<Vec<String>>> {
+        self.file_lines.get(&(path.to_string(), git_ref.to_string())).cloned()
+    }
+
+    pub fn file_lines_loading(&self, path: &str, git_ref: &str) -> bool {
+        self.file_lines_pending.contains(&(path.to_string(), git_ref.to_string()))
+    }
 }
 
 /// Show an error in the active window. Models have no window of their own.
