@@ -1,5 +1,6 @@
 //! Colors the stock theme does not have (diff palette tuned to `theme.json`).
 
+use gpui_kit::component::{avatar::Avatar, Sizable as _};
 use gpui_kit::*;
 
 pub fn diff_add_bg() -> Hsla { rgba(0x3fb95024).into() }
@@ -13,4 +14,10 @@ pub fn search_match_active() -> Hsla { rgba(0xf2cc60aa).into() }
 /// Parse a GitHub label color like `d73a4a`.
 pub fn hex(color: &str) -> Hsla {
     rgb(u32::from_str_radix(color, 16).unwrap_or(0x8b949e)).into()
+}
+
+/// Small round user avatar; initials when GitHub gave no URL (an empty image source would render broken).
+pub fn avatar(login: &str, url: &str) -> Avatar {
+    let avatar = Avatar::new().name(login.to_string()).xsmall();
+    if url.is_empty() { avatar } else { avatar.src(url.to_string()) }
 }

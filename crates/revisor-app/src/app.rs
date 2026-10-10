@@ -1,6 +1,6 @@
 //! Root view: routing, session, status bar.
 
-use crate::backend;
+use crate::{backend, theme};
 use crate::screens::{auth::AuthScreen, pr_detail::PrDetailScreen, pr_list::PrListScreen, repos::ReposScreen};
 use gpui_kit::component::{notification::Notification, spinner::Spinner, *};
 use gpui_kit::{prelude::*, *};
@@ -139,7 +139,9 @@ impl AppRoot {
             .children(self.rate.as_ref().map(|r| {
                 div().text_color(rate_color).child(format!("API: {}/{}", r.remaining, r.limit))
             }))
-            .child(div().ml_auto().children(self.user.as_ref().map(|u| u.login.clone())))
+            .children(self.user.as_ref().map(|u| {
+                h_flex().ml_auto().gap_1().child(theme::avatar(&u.login, &u.avatar_url)).child(u.login.clone())
+            }))
     }
 }
 

@@ -11,6 +11,7 @@ actions!(revisor, [Quit]);
 fn main() {
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
+        .with_http_client(std::sync::Arc::new(reqwest_client::ReqwestClient::new()))
         .run(|cx| {
             gpui_kit::init(cx);
             let registry = ThemeRegistry::global_mut(cx);

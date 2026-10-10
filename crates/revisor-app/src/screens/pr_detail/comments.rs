@@ -1,7 +1,7 @@
 //! Inline comment thread widgets, shared by the diff and the conversations panel.
 
 use super::state::PrModel;
-use crate::{app, backend};
+use crate::{app, backend, theme};
 use gpui_kit::component::{
     button::{Button, ButtonVariant, ButtonVariants as _},
     input::{Escape, InputEvent, Textarea, TextareaState},
@@ -297,6 +297,7 @@ impl ThreadView {
                 h_flex()
                     .gap_2()
                     .text_xs()
+                    .child(theme::avatar(&c.author_login, &c.author_avatar))
                     .child(div().font_semibold().child(c.author_login.clone()))
                     .child(div().text_color(theme.muted_foreground).child(relative_time(&c.created_at)))
                     .child(div().flex_1())

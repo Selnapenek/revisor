@@ -10,7 +10,7 @@ mod semantic;
 pub mod state;
 
 use crate::app::{self, Route};
-use crate::backend;
+use crate::{backend, theme};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     resizable::{h_resizable, resizable_panel},
@@ -130,11 +130,14 @@ impl PrDetailScreen {
                     .child(tag.small())
                     .child(div().text_sm().font_medium().truncate().child(pr.title.clone()))
                     .child(
-                        div()
+                        h_flex()
                             .flex_shrink_0()
+                            .gap_1()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(format!("#{} · {} · {}", pr.number, pr.author_login, relative_time(&pr.updated_at))),
+                            .child(format!("#{} ·", pr.number))
+                            .child(theme::avatar(&pr.author_login, &pr.author_avatar))
+                            .child(format!("{} · {}", pr.author_login, relative_time(&pr.updated_at))),
                     )
             }))
     }

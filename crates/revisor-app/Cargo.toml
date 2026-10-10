@@ -10,4 +10,6 @@ path = "src/main.rs"
 [dependencies]
 revisor-core = { path = "../revisor-core" }
 gpui-kit = "0.7"
+# Must match gpui-pre version pulled by gpui-kit; desktop gpui ships no HttpClient, so img(url) needs this.
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.7" }
 tokio = { version = "1", features = ["rt-multi-thread"] }

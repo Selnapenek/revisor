@@ -397,6 +397,7 @@ impl PrListScreen {
                             .overflow_hidden()
                             .text_xs()
                             .text_color(theme.muted_foreground)
+                            .child(theme::avatar(&pr.author_login, &pr.author_avatar))
                             .child(pr.author_login.clone())
                             .child("·")
                             .child(relative_time(&pr.updated_at))

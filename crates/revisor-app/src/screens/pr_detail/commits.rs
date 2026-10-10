@@ -94,9 +94,11 @@ impl RenderOnce for CommitSelector {
                         .child(div().min_w_0().truncate().child(c.message.lines().next().unwrap_or("").to_string())),
                 )
                 .child(
-                    div()
+                    h_flex()
+                        .gap_1()
                         .text_xs()
                         .text_color(theme.muted_foreground)
+                        .child(crate::theme::avatar(&c.author_login, &c.author_avatar))
                         .child(format!("{} · {}", c.author_login, relative_time(&c.authored_date))),
                 )
         });

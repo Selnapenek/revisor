@@ -1,7 +1,7 @@
 //! Conversations tab: timeline of threads, issue comments and reviews; AI ranking of review findings.
 
 use super::state::{CommitSelection, PrModel, ScrollTarget};
-use crate::backend;
+use crate::{backend, theme};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
@@ -234,6 +234,7 @@ impl ConversationsPanel {
             .child(
                 h_flex()
                     .gap_1p5()
+                    .child(theme::avatar(&t.root.author_login, &t.root.author_avatar))
                     .child(div().text_xs().font_semibold().truncate().child(t.root.author_login.clone()))
                     .child(div().flex_shrink_0().text_xs().text_color(theme.muted_foreground).child(relative_time(&t.root.created_at)))
                     .child(div().flex_1())
@@ -262,6 +263,7 @@ impl ConversationsPanel {
         kind: &'static str,
         id: u64,
         author: &str,
+        avatar_url: &str,
         time: Option<&str>,
         badge: Tag,
         body: &str,
@@ -279,6 +281,7 @@ impl ConversationsPanel {
             .child(
                 h_flex()
                     .gap_1p5()
+                    .child(theme::avatar(author, avatar_url))
                     .child(div().text_xs().font_semibold().truncate().child(author.to_string()))
                     .children(time.map(|t| div().flex_shrink_0().text_xs().text_color(theme.muted_foreground).child(relative_time(t))))
                     .child(div().flex_1())
@@ -335,6 +338,7 @@ impl ConversationsPanel {
                     "issue",
                     c.id,
                     &c.author_login,
+                    &c.author_avatar,
                     Some(&c.created_at),
                     Tag::secondary().child("Conversation"),
                     &c.body,
@@ -349,7 +353,7 @@ impl ConversationsPanel {
                         "DISMISSED" => Tag::secondary().child("Dismissed"),
                         other => Tag::secondary().child(other.to_string()),
                     };
-                    self.body_card("review", r.id, &r.author_login, r.submitted_at.as_deref(), badge, &r.body, &r.html_url, cx)
+                    self.body_card("review", r.id, &r.author_login, &r.author_avatar, r.submitted_at.as_deref(), badge, &r.body, &r.html_url, cx)
                 }
             })
             .collect();
