@@ -37,6 +37,9 @@ pub enum ScrollTarget {
 
 pub enum PrEvent {
     ScrollTo(ScrollTarget),
+    /// `selected` followed the diff scroll position. Not a `notify`, so views that only
+    /// depend on rows skip their rebuild while the user scrolls.
+    SelectedFromScroll,
 }
 
 pub struct CodeSearch {
@@ -264,7 +267,7 @@ impl PrModel {
     pub fn set_selected_from_scroll(&mut self, path: &str, cx: &mut Context<Self>) {
         if self.selected.as_deref() != Some(path) {
             self.selected = Some(path.to_string());
-            cx.notify();
+            cx.emit(PrEvent::SelectedFromScroll);
         }
     }
 

@@ -1,6 +1,6 @@
 //! Files tab: AI review focus on top, then the filterable file list / tree with review progress.
 
-use super::state::{CommitSelection, PrModel, ScrollTarget};
+use super::state::{CommitSelection, PrEvent, PrModel, ScrollTarget};
 use crate::backend;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
@@ -65,13 +65,23 @@ impl FilesPanel {
                     input.update(cx, |s, cx| s.set_value(value, window, cx));
                 }
             }
+            this.rebuild_rows(cx);
             cx.notify();
+        }));
+        subscriptions.push(cx.subscribe(&model, |this, _, event: &PrEvent, cx| {
+            if let PrEvent::SelectedFromScroll = event {
+                this.reveal_selected(cx);
+                cx.notify();
+            }
         }));
         backend::spawn(
             window,
             cx,
             |s| async move { queries::get_setting(s.cache.lock().await.conn(), VIEW_KEY).map_err(backend::err) },
-            |this: &mut Self, result, _, _| this.tree = result.ok().flatten().as_deref() == Some("tree"),
+            |this: &mut Self, result, _, cx| {
+                this.tree = result.ok().flatten().as_deref() == Some("tree");
+                this.rebuild_rows(cx);
+            },
         )
         .detach();
         let focus = cx.new(|cx| FocusPanel::new(model.clone(), window, cx));
@@ -111,6 +121,7 @@ impl FilesPanel {
     fn toggle_view(&mut self, cx: &mut Context<Self>) {
         self.tree = !self.tree;
         self.scrolled_to = None;
+        self.rebuild_rows(cx);
         let value = if self.tree { "tree" } else { "list" };
         let save = backend::call(cx, move |s| async move {
             queries::set_setting(s.cache.lock().await.conn(), VIEW_KEY, value).map_err(backend::err)
@@ -135,6 +146,12 @@ impl FilesPanel {
                 })
                 .collect()
         };
+        self.reveal_selected(cx);
+    }
+
+    /// Scroll the sidebar to the selected file once per selection change.
+    fn reveal_selected(&mut self, cx: &App) {
+        let m = self.model.read(cx);
         if m.selected != self.scrolled_to {
             self.scrolled_to = m.selected.clone();
             if let Some(ix) = self.rows.iter().position(|r| m.selected.as_ref() == Some(&r.path)) {
@@ -168,6 +185,7 @@ impl FilesPanel {
                             if !this.collapsed_dirs.remove(&path) {
                                 this.collapsed_dirs.insert(path.clone());
                             }
+                            this.rebuild_rows(cx);
                             cx.notify();
                         }))
                         .child(
@@ -233,7 +251,6 @@ impl FilesPanel {
 
 impl Render for FilesPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.rebuild_rows(cx);
         let m = self.model.read(cx);
         let (reviewed, total) = review_progress(&m.files, &m.reviewed);
         let has_globs = !(m.include.is_empty() && m.exclude.is_empty());

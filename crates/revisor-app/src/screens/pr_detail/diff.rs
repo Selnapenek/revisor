@@ -112,7 +112,7 @@ impl DiffView {
         let subscriptions = vec![
             cx.observe_in(&model, window, |this, _, window, cx| this.sync(window, cx)),
             cx.subscribe_in(&model, window, |this, _, event: &PrEvent, window, cx| {
-                let PrEvent::ScrollTo(target) = event;
+                let PrEvent::ScrollTo(target) = event else { return };
                 this.sync(window, cx);
                 this.scroll_to(target, cx);
             }),
@@ -184,7 +184,6 @@ impl DiffView {
         } else if let Some((old, count)) = changed_span(&self.rows, &rows) {
             // Splice only what changed so measured heights and the scroll position survive.
             self.list.splice(old, count);
-            self.list.clone().with_uniform_item_height(ROW_HEIGHT);
         }
         self.rows = rows;
 

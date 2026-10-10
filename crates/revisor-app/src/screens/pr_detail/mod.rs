@@ -158,10 +158,14 @@ impl PrDetailScreen {
                     }))
                     .children(tabs.into_iter().map(|label| Tab::new().label(label))),
             )
-            .child(div().flex_1().min_h_0().child(match self.tab {
-                SidebarTab::Files => self.files.clone().into_any_element(),
-                SidebarTab::Conversations => self.conversations.clone().into_any_element(),
-                SidebarTab::Semantic => self.semantic.clone().into_any_element(),
+            // Cached: the panels re-render only when they notify, not on every diff scroll frame.
+            .child(div().flex_1().min_h_0().child({
+                let view: AnyView = match self.tab {
+                    SidebarTab::Files => self.files.clone().into(),
+                    SidebarTab::Conversations => self.conversations.clone().into(),
+                    SidebarTab::Semantic => self.semantic.clone().into(),
+                };
+                view.cached(StyleRefinement::default().size_full())
             }))
     }
 }
