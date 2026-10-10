@@ -7,6 +7,7 @@ mod conversations;
 mod diff;
 mod files;
 mod semantic;
+mod syntax;
 pub mod state;
 
 use crate::app::{self, Route};

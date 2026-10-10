@@ -3,6 +3,7 @@
 use super::code_text::CodeText;
 use super::comments::{save_comment, CommentForm, CommentFormEvent, ThreadView};
 use super::state::{CommitSelection, DiffMode, PrEvent, PrModel, ScrollTarget};
+use super::syntax::FileSyntax;
 use crate::{backend, theme};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
@@ -105,6 +106,8 @@ pub struct DiffView {
     list: ListState,
     /// Context-expanded hunks by path, for the current commit selection.
     expanded: HashMap<String, Expanded>,
+    /// Syntax colors by path, filled when a file's lines first render.
+    syntax: HashMap<String, FileSyntax>,
     /// Expand click waiting for the file content.
     pending_expand: Option<(usize, Expand)>,
     new_comment: Option<NewTarget>,
@@ -151,6 +154,7 @@ impl DiffView {
             rows: vec![],
             list,
             expanded: HashMap::new(),
+            syntax: HashMap::new(),
             pending_expand: None,
             new_comment: None,
             dragging: false,
@@ -172,6 +176,7 @@ impl DiffView {
         if reset {
             self.files_key = key;
             self.expanded.clear();
+            self.syntax.clear();
             self.pending_expand = None;
             self.new_comment = None;
         }
@@ -411,7 +416,18 @@ impl DiffView {
             Expand::All(gap) => expand_all(&mut hunks, &gap, lines),
         }
         let side_by_side = to_side_by_side(&hunks);
-        self.expanded.insert(model.files[fi].filename.clone(), Expanded { hunks, side_by_side });
+        let path = model.files[fi].filename.clone();
+        self.syntax.remove(&path);
+        self.expanded.insert(path, Expanded { hunks, side_by_side });
+    }
+
+    fn ensure_syntax(&mut self, fi: usize, cx: &App) {
+        let model = self.model.read(cx);
+        let path = &model.files[fi].filename;
+        if !self.syntax.contains_key(path) {
+            let syntax = FileSyntax::new(path, self.hunks(model, fi), &cx.theme().highlight_theme);
+            self.syntax.insert(path.clone(), syntax);
+        }
     }
 
     /// Gutter `+` press. Shift/Cmd+press (or any press after a Cmd+press) on the same file and side
@@ -509,6 +525,9 @@ impl DiffView {
 
     fn row_element(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(&row) = self.rows.get(ix) else { return div().into_any_element() };
+        if let Row::Split(fi, _) | Row::Unified(fi, ..) = row {
+            self.ensure_syntax(fi, cx);
+        }
         let thread = match row {
             Row::Thread(_, id) => Some(self.thread_view(id, cx)),
             _ => None,
@@ -750,7 +769,7 @@ impl DiffView {
             .into_any_element()
     }
 
-    /// Line content with word-diff and search highlights.
+    /// Line content with syntax colors and word-diff and search highlights.
     fn line_text(&self, fi: usize, l: &DiffLine, order: u64, model: &PrModel) -> impl IntoElement {
         let spans = model.files[fi].diff.as_ref().map_or(&[][..], |d| word_spans(d, l));
         let (ranges, active) = match (self.matches.get(&(fi, l.old_lineno, l.new_lineno)), &model.search) {
@@ -760,7 +779,7 @@ impl DiffView {
             ),
             _ => (vec![], None),
         };
-        let highlights = segments(l.content.len(), spans, &ranges, active).into_iter().filter_map(|s| {
+        let backgrounds = segments(l.content.len(), spans, &ranges, active).into_iter().filter_map(|s| {
             let bg = match s.kind {
                 _ if s.active => theme::search_match_active(),
                 _ if s.matched => theme::search_match(),
@@ -770,6 +789,8 @@ impl DiffView {
             };
             Some((s.range, HighlightStyle { background_color: Some(bg), ..Default::default() }))
         });
+        let syntax = self.syntax.get(&model.files[fi].filename).map_or(&[][..], |s| s.line(l));
+        let highlights = combine_highlights(syntax.iter().cloned(), backgrounds);
         let id = ElementId::NamedInteger(format!("code:{fi}:{:?}:{:?}", l.old_lineno, l.new_lineno).into(), order >> 32);
         div().flex_1().min_w_0().px_2().child(code_text(id, order, &l.content, highlights))
     }
