@@ -781,10 +781,16 @@ impl Render for DiffView {
                 .text_color(cx.theme().muted_foreground)
                 .child("No files to review")
         } else {
+            // Pin the header of the file at the top of the viewport.
+            let top = self.rows.get(self.list.logical_scroll_top().item_ix).map(|r| r.file());
             div()
+                .relative()
                 .flex_1()
                 .min_h_0()
                 .child(gpui_kit::list(self.list.clone(), cx.processor(Self::render_row)).size_full())
+                .children(top.map(|fi| {
+                    div().id("sticky-file-header").absolute().top_0().left_0().right_0().child(self.file_header(fi, model, cx))
+                }))
                 .vertical_scrollbar(&self.list)
         };
         v_flex()
