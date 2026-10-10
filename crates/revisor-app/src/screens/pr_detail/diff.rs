@@ -435,7 +435,12 @@ impl DiffView {
         self.threads.entry(id).or_insert_with(|| cx.new(|cx| ThreadView::new(model, id, true, cx))).clone()
     }
 
-    fn render_row(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        // List items size to their content; a stretching column makes every row full width.
+        v_flex().w_full().child(self.row_element(ix, window, cx)).into_any_element()
+    }
+
+    fn row_element(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(&row) = self.rows.get(ix) else { return div().into_any_element() };
         let thread = match row {
             Row::Thread(_, id) => Some(self.thread_view(id, cx)),

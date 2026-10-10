@@ -367,6 +367,7 @@ impl PrListScreen {
                 let comments = pr.comments_count + pr.review_comments_count;
                 v_flex()
                     .id(("pr", pr.number))
+                    .w_full()
                     .h(px(56.))
                     .justify_center()
                     .gap_1()
@@ -378,6 +379,7 @@ impl PrListScreen {
                     .on_click(move |_, window, cx| app::navigate(route.clone(), window, cx))
                     .child(
                         h_flex()
+                            .w_full()
                             .gap_2()
                             .child(state.small().flex_shrink_0())
                             .child(div().flex_1().min_w_0().text_sm().font_medium().truncate().child(pr.title.clone()))

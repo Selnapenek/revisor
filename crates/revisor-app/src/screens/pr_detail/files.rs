@@ -152,6 +152,7 @@ impl FilesPanel {
                 let path = row.path.clone();
                 let el = h_flex()
                     .id(SharedString::from(row.path.clone()))
+                    .w_full()
                     .h(px(ROW_HEIGHT))
                     .gap_1p5()
                     .pl(px(12. + row.depth as f32 * 12.))
