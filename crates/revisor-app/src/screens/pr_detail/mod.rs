@@ -1,5 +1,6 @@
 //! PR detail: header, resizable sidebar (files / conversations / semantic) and the diff.
 
+mod code_text;
 mod comments;
 mod commits;
 mod conversations;

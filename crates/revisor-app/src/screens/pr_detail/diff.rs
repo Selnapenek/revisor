@@ -1,5 +1,6 @@
 //! The diff: toolbar, code search bar and one virtualized list over every visible file.
 
+use super::code_text::CodeText;
 use super::comments::{save_comment, CommentForm, CommentFormEvent, ThreadView};
 use super::state::{CommitSelection, DiffMode, PrEvent, PrModel, ScrollTarget};
 use crate::{backend, theme};
@@ -77,9 +78,25 @@ struct Expanded {
 struct NewTarget {
     file: usize,
     side: Side,
-    line: u64,
+    /// Pressed line; dragging or a modifier click moves `end` to make a multi-line range.
+    anchor: u64,
+    end: u64,
+    /// Opened with Cmd+click: the next click on the same side sets `end`.
+    pick_end: bool,
     form: Entity<CommentForm>,
     _subscription: Subscription,
+}
+
+impl NewTarget {
+    /// First and last line. The form shows under the last.
+    fn range(&self) -> (u64, u64) {
+        (self.anchor.min(self.end), self.anchor.max(self.end))
+    }
+
+    fn covers(&self, fi: usize, side: Side, line: u64) -> bool {
+        let (first, last) = self.range();
+        self.file == fi && self.side == side && (first..=last).contains(&line)
+    }
 }
 
 pub struct DiffView {
@@ -91,6 +108,8 @@ pub struct DiffView {
     /// Expand click waiting for the file content.
     pending_expand: Option<(usize, Expand)>,
     new_comment: Option<NewTarget>,
+    /// Mouse is held after pressing a gutter `+`; moving over lines extends the range.
+    dragging: bool,
     threads: HashMap<u64, Entity<ThreadView>>,
     /// Search match index ranges by file and (old, new) line number.
     matches: HashMap<(usize, Option<u64>, Option<u64>), Range<usize>>,
@@ -134,6 +153,7 @@ impl DiffView {
             expanded: HashMap::new(),
             pending_expand: None,
             new_comment: None,
+            dragging: false,
             threads: HashMap::new(),
             matches: HashMap::new(),
             search_open: false,
@@ -202,7 +222,8 @@ impl DiffView {
     fn build_rows(&self, cx: &App) -> Vec<Row> {
         let model = self.model.read(cx);
         let git_ref = model.head_sha();
-        let new_target = self.new_comment.as_ref().map(|n| (n.file, n.side, n.line));
+        // Hidden while dragging, so the form does not push the next lines away from the cursor.
+        let new_target = self.new_comment.as_ref().filter(|_| !self.dragging).map(|n| (n.file, n.side, n.range().1));
         let mut rows = Vec::new();
         for &fi in &model.visible {
             let file = &model.files[fi];
@@ -393,6 +414,51 @@ impl DiffView {
         self.expanded.insert(model.files[fi].filename.clone(), Expanded { hunks, side_by_side });
     }
 
+    /// Gutter `+` press. Shift/Cmd+press (or any press after a Cmd+press) on the same file and side
+    /// sets the range end of the open form; otherwise opens a form on `line`. Then drag to extend.
+    fn comment_press(&mut self, fi: usize, side: Side, line: u64, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let extend = e.modifiers.shift || e.modifiers.secondary();
+        match self.new_comment.as_mut().filter(|n| n.file == fi && n.side == side && (extend || n.pick_end)) {
+            Some(n) => {
+                n.end = line;
+                n.pick_end = false;
+            }
+            None => {
+                self.open_new_comment(fi, side, line, window, cx);
+                if let Some(n) = &mut self.new_comment {
+                    n.pick_end = e.modifiers.secondary();
+                }
+            }
+        }
+        self.dragging = true;
+        self.rebuild(false, cx);
+        cx.notify();
+    }
+
+    /// Mouse moved over a line while dragging from a gutter `+`.
+    fn drag_to(&mut self, fi: usize, side: Side, line: u64, e: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if !self.dragging {
+            return;
+        }
+        if e.pressed_button != Some(MouseButton::Left) {
+            // Released outside the diff.
+            return self.end_drag(cx);
+        }
+        if let Some(n) = self.new_comment.as_mut().filter(|n| n.file == fi && n.side == side && n.end != line) {
+            n.end = line;
+            n.pick_end = false;
+            cx.notify();
+        }
+    }
+
+    fn end_drag(&mut self, cx: &mut Context<Self>) {
+        if self.dragging {
+            self.dragging = false;
+            self.rebuild(false, cx);
+            cx.notify();
+        }
+    }
+
     fn open_new_comment(&mut self, fi: usize, side: Side, line: u64, window: &mut Window, cx: &mut Context<Self>) {
         let (form, subscription) =
             CommentForm::open("", "Write a comment...", "Comment", window, cx, move |this, form, event, window, cx| {
@@ -402,6 +468,7 @@ impl DiffView {
                     cx.notify();
                     return;
                 };
+                let Some((first, line)) = this.new_comment.as_ref().map(NewTarget::range) else { return };
                 let m = this.model.read(cx);
                 let Some(commit_id) = m.pr.as_ref().map(|pr| pr.head_sha.clone()) else { return };
                 let (o, r, n) = (m.owner.to_string(), m.repo.to_string(), m.number);
@@ -411,6 +478,7 @@ impl DiffView {
                     side: if side == Side::Left { "LEFT" } else { "RIGHT" }.into(),
                     body: body.clone(),
                     commit_id,
+                    start_line: (first < line).then_some(first),
                 };
                 let model = this.model.clone();
                 save_comment(
@@ -424,7 +492,7 @@ impl DiffView {
                     |this: &mut Self, _| this.new_comment = None,
                 );
             });
-        self.new_comment = Some(NewTarget { file: fi, side, line, form, _subscription: subscription });
+        self.new_comment = Some(NewTarget { file: fi, side, anchor: line, end: line, pick_end: false, form, _subscription: subscription });
         self.rebuild(false, cx);
         cx.notify();
     }
@@ -468,13 +536,28 @@ impl DiffView {
                 .border_color(theme.border)
                 .children(self.hunks(model, fi).get(h).map(|h| h.header.clone()))
                 .into_any_element(),
-            Row::Split(..) | Row::Unified(..) => self.line_row(row, model, cx).into_any_element(),
+            Row::Split(..) | Row::Unified(..) => self.line_row(ix, row, model, cx).into_any_element(),
             Row::Thread(..) => div().px_4().py_1().children(thread).into_any_element(),
             Row::NewComment(_) => div()
                 .px_4()
                 .py_1()
                 .children(self.new_comment.as_ref().map(|n| {
-                    div().p_3().rounded(theme.radius).border_1().border_color(theme.border).bg(theme.secondary).child(n.form.clone())
+                    let (first, last) = n.range();
+                    v_flex()
+                        .gap_2()
+                        .p_3()
+                        .rounded(theme.radius)
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.secondary)
+                        .child(div().text_xs().text_color(theme.muted_foreground).child(if n.pick_end {
+                            format!("Comment from line {first} · click + on the last line")
+                        } else if first == last {
+                            format!("Comment on line {last} · drag or Shift+click + for a range")
+                        } else {
+                            format!("Comment on lines {first}–{last}")
+                        }))
+                        .child(n.form.clone())
                 }))
                 .into_any_element(),
         }
@@ -577,10 +660,15 @@ impl DiffView {
             })
     }
 
-    fn line_row(&self, row: Row, model: &PrModel, cx: &Context<Self>) -> impl IntoElement {
+    fn line_row(&self, ix: usize, row: Row, model: &PrModel, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let fi = row.file();
         let [first, second] = self.row_lines(model, row);
+        // Lines in the new comment's range are tinted.
+        let bg = |l: &DiffLine, side: Side, number: Option<u64>| {
+            let commented = number.is_some_and(|n| self.new_comment.as_ref().is_some_and(|c| c.covers(fi, side, n)));
+            if commented { Some(theme.primary.opacity(0.2)) } else { line_bg(l.kind) }
+        };
         let el = div().flex().w_full().text_xs().line_height(ROW_HEIGHT).font_family(theme.mono_font_family.clone());
         if let Row::Split(..) = row {
             let half = |line: Option<&DiffLine>, side: Side| {
@@ -590,9 +678,10 @@ impl DiffView {
                     .flex_1()
                     .min_w_0()
                     .group(LINE_GROUP)
-                    .when_some(line.and_then(|l| line_bg(l.kind)), |el, bg| el.bg(bg))
+                    .when_some(line.and_then(|l| bg(l, side, number)), |el, bg| el.bg(bg))
+                    .when_some(number, |el, n| el.on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| this.drag_to(fi, side, n, e, cx))))
                     .child(self.gutter(fi, number, number.map(|n| (side, n)), model, cx))
-                    .children(line.map(|l| self.line_text(fi, l, model)))
+                    .children(line.map(|l| self.line_text(fi, l, code_order(ix, side), model)))
             };
             return el.child(half(first, Side::Left)).child(half(second, Side::Right));
         }
@@ -604,14 +693,15 @@ impl DiffView {
             DiffLineKind::Context => (" ", theme.muted_foreground),
         };
         el.group(LINE_GROUP)
-            .when_some(line_bg(l.kind), |el, bg| el.bg(bg))
+            .when_some(bg(l, side, anchor), |el, bg| el.bg(bg))
+            .when_some(anchor, |el, n| el.on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| this.drag_to(fi, side, n, e, cx))))
             .child(self.gutter(fi, l.old_lineno, anchor.map(|n| (side, n)), model, cx))
             .child(self.gutter(fi, l.new_lineno, None, model, cx))
             .child(div().w_3().flex_shrink_0().text_color(color).child(prefix))
-            .child(self.line_text(fi, l, model))
+            .child(self.line_text(fi, l, code_order(ix, Side::Left), model))
     }
 
-    /// Line number cell; with an anchor it is clickable and starts a new comment on that line.
+    /// Line number cell; with an anchor, pressing it starts a new comment on that line.
     fn gutter(
         &self,
         fi: usize,
@@ -649,12 +739,19 @@ impl DiffView {
                     .invisible()
                     .group_hover(LINE_GROUP, |s| s.visible()),
             )
-            .on_click(cx.listener(move |this, _, window, cx| this.open_new_comment(fi, side, line, window, cx)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                    // Keep the window text selection from starting a drag here.
+                    cx.stop_propagation();
+                    this.comment_press(fi, side, line, e, window, cx)
+                }),
+            )
             .into_any_element()
     }
 
     /// Line content with word-diff and search highlights.
-    fn line_text(&self, fi: usize, l: &DiffLine, model: &PrModel) -> impl IntoElement {
+    fn line_text(&self, fi: usize, l: &DiffLine, order: u64, model: &PrModel) -> impl IntoElement {
         let spans = model.files[fi].diff.as_ref().map_or(&[][..], |d| word_spans(d, l));
         let (ranges, active) = match (self.matches.get(&(fi, l.old_lineno, l.new_lineno)), &model.search) {
             (Some(r), Some(search)) => (
@@ -673,7 +770,8 @@ impl DiffView {
             };
             Some((s.range, HighlightStyle { background_color: Some(bg), ..Default::default() }))
         });
-        div().flex_1().min_w_0().px_2().child(styled_line(&l.content, highlights))
+        let id = ElementId::NamedInteger(format!("code:{fi}:{:?}:{:?}", l.old_lineno, l.new_lineno).into(), order >> 32);
+        div().flex_1().min_w_0().px_2().child(code_text(id, order, &l.content, highlights))
     }
 
     fn toolbar(&self, model: &PrModel, cx: &Context<Self>) -> impl IntoElement {
@@ -787,6 +885,7 @@ impl Render for DiffView {
                 .relative()
                 .flex_1()
                 .min_h_0()
+                .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
                 .child(gpui_kit::list(self.list.clone(), cx.processor(Self::render_row)).size_full())
                 .children(top.map(|fi| {
                     div().id("sticky-file-header").absolute().top_0().left_0().right_0().child(self.file_header(fi, model, cx))
@@ -833,16 +932,30 @@ fn word_spans<'a>(diff: &'a ProcessedDiff, l: &DiffLine) -> &'a [WordDiffSpan] {
     }
 }
 
-/// Line text with tabs expanded to four spaces; highlight byte ranges follow the expansion.
-fn styled_line(content: &str, highlights: impl Iterator<Item = (Range<usize>, HighlightStyle)>) -> StyledText {
+/// Selection order of a code line: the whole left column before the right one, so a drag
+/// down one split column does not take the other. Thread comments keep order 0.
+fn code_order(ix: usize, side: Side) -> u64 {
+    let column = if side == Side::Left { 0 } else { 1 << 32 };
+    column + ix as u64 + 1
+}
+
+/// Selectable line text with tabs expanded to four spaces; highlight byte ranges follow the expansion.
+// ponytail: copy gives spaces for tabs and only rows the list has rendered; keep raw text per run if that matters.
+fn code_text(
+    id: ElementId,
+    order: u64,
+    content: &str,
+    highlights: impl Iterator<Item = (Range<usize>, HighlightStyle)>,
+) -> CodeText {
     if content.is_empty() {
-        return StyledText::new(" ");
+        return CodeText::new(id, " ".into(), vec![], order);
     }
     if !content.contains('\t') {
-        return StyledText::new(content.to_string()).with_highlights(highlights);
+        return CodeText::new(id, content.to_string().into(), highlights.collect(), order);
     }
     let at = |i: usize| i + 3 * content[..i].matches('\t').count();
-    StyledText::new(content.replace('\t', "    ")).with_highlights(highlights.map(|(r, s)| (at(r.start)..at(r.end), s)))
+    let highlights = highlights.map(|(r, s)| (at(r.start)..at(r.end), s)).collect();
+    CodeText::new(id, content.replace('\t', "    ").into(), highlights, order)
 }
 
 /// The range of `old` replaced in `new` (after the common prefix and suffix) and its new length.

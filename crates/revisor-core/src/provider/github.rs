@@ -770,15 +770,7 @@ impl GitProvider for GithubProvider {
             owner, repo, number
         );
 
-        let body = serde_json::json!({
-            "body": params.body,
-            "commit_id": params.commit_id,
-            "path": params.path,
-            "line": params.line,
-            "side": params.side,
-        });
-
-        let comment: GhReviewComment = self.post(&url, &body).await?;
+        let comment: GhReviewComment = self.post(&url, &new_comment_body(&params)).await?;
         Ok(comment.into())
     }
 
@@ -1122,4 +1114,42 @@ fn urlencoding(s: &str) -> String {
             _ => format!("%{:02X}", b),
         })
         .collect()
+}
+
+fn new_comment_body(params: &NewComment) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "body": params.body,
+        "commit_id": params.commit_id,
+        "path": params.path,
+        "line": params.line,
+        "side": params.side,
+    });
+    if let Some(start) = params.start_line {
+        body["start_line"] = start.into();
+        body["start_side"] = params.side.clone().into();
+    }
+    body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_comment_body_adds_range_only_when_set() {
+        let mut params = NewComment {
+            path: "a.rs".into(),
+            line: 14,
+            side: "RIGHT".into(),
+            body: "x".into(),
+            commit_id: "sha".into(),
+            start_line: None,
+        };
+        assert!(new_comment_body(&params).get("start_line").is_none());
+        params.start_line = Some(10);
+        let body = new_comment_body(&params);
+        assert_eq!(body["start_line"], 10);
+        assert_eq!(body["start_side"], "RIGHT");
+        assert_eq!(body["line"], 14);
+    }
 }

@@ -174,6 +174,9 @@ pub struct NewComment {
     pub side: String,
     pub body: String,
     pub commit_id: String,
+    /// First line of a multi-line comment (same side as `line`).
+    #[serde(default)]
+    pub start_line: Option<u64>,
 }
 
 /// Thread resolution info (from GraphQL API)
