@@ -358,11 +358,11 @@ impl PrListScreen {
                 let state = if pr.merged_at.is_some() {
                     Tag::color(ColorName::Purple).child("Merged")
                 } else if pr.state == "closed" {
-                    Tag::danger().child("Closed")
+                    Tag::color(ColorName::Red).child("Closed")
                 } else if pr.draft {
                     Tag::secondary().child("Draft")
                 } else {
-                    Tag::success().child("Open")
+                    Tag::color(ColorName::Green).child("Open")
                 };
                 let comments = pr.comments_count + pr.review_comments_count;
                 v_flex()
