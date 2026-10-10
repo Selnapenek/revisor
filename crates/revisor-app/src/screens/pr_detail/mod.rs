@@ -200,7 +200,8 @@ impl Render for PrDetailScreen {
                         }
                     }))
                     .child(resizable_panel().size(width).size_range(px(180.)..px(600.)).child(self.sidebar(cx)))
-                    .child(resizable_panel().child(self.diff.clone()))
+                    // Opaque so code stays readable over the blurred window.
+                    .child(resizable_panel().child(div().size_full().bg(cx.theme().colors.list).child(self.diff.clone())))
                     .into_any_element(),
                 _ => div().flex_1().flex().items_center().justify_center().child(Spinner::new()).into_any_element(),
             })

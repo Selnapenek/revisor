@@ -1,12 +1,12 @@
-//! Colors the stock theme does not have (GitHub-dark diff palette).
+//! Colors the stock theme does not have (diff palette tuned to `theme.json`).
 
 use gpui_kit::*;
 
-pub fn diff_add_bg() -> Hsla { rgba(0x2ea04326).into() }
-pub fn diff_add_word() -> Hsla { rgba(0x2ea04366).into() }
-pub fn diff_del_bg() -> Hsla { rgba(0xf8514926).into() }
-pub fn diff_del_word() -> Hsla { rgba(0xf8514966).into() }
-pub fn diff_hunk_bg() -> Hsla { rgba(0x388bfd1a).into() }
+pub fn diff_add_bg() -> Hsla { rgba(0x3fb95024).into() }
+pub fn diff_add_word() -> Hsla { rgba(0x3fb9505c).into() }
+pub fn diff_del_bg() -> Hsla { rgba(0xf8514924).into() }
+pub fn diff_del_word() -> Hsla { rgba(0xf851495c).into() }
+pub fn diff_hunk_bg() -> Hsla { rgba(0x7c6cff1f).into() }
 pub fn search_match() -> Hsla { rgba(0xbb800966).into() }
 pub fn search_match_active() -> Hsla { rgba(0xf2cc60aa).into() }
 

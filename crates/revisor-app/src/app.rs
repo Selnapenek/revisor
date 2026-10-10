@@ -146,10 +146,11 @@ impl AppRoot {
 impl Render for AppRoot {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        // No bg here: Root paints the translucent `background` over the blurred window.
         v_flex()
             .size_full()
-            .bg(theme.background)
             .text_color(theme.foreground)
+            .child(TitleBar::new().child(div().text_xs().font_medium().text_color(theme.muted_foreground).child("Revisor")))
             .child(match &self.screen {
                 Some(screen) => div().flex_1().overflow_hidden().child(screen.clone()),
                 None => div()

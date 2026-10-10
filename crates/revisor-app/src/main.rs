@@ -3,7 +3,7 @@ mod backend;
 mod screens;
 mod theme;
 
-use gpui_kit::component::{Theme, ThemeMode};
+use gpui_kit::component::{Theme, ThemeMode, ThemeRegistry, TitleBar};
 use gpui_kit::*;
 
 actions!(revisor, [Quit]);
@@ -13,6 +13,10 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(|cx| {
             gpui_kit::init(cx);
+            let registry = ThemeRegistry::global_mut(cx);
+            registry.load_themes_from_str(include_str!("theme.json")).expect("theme.json is valid");
+            let dark = registry.themes()["Revisor Dark"].clone();
+            Theme::global_mut(cx).dark_theme = dark;
             Theme::change(ThemeMode::Dark, None, cx);
             backend::init(cx);
             screens::pr_detail::init(cx);
@@ -33,11 +37,8 @@ fn main() {
                     cx,
                 ))),
                 window_min_size: Some(size(px(900.), px(600.))),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Revisor".into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
+                window_background: WindowBackgroundAppearance::Blurred,
+                ..TitleBar::window_options()
             };
             gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| app::AppRoot::new(window, cx))
