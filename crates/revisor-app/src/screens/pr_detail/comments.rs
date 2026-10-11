@@ -2,7 +2,7 @@
 
 use super::markdown_editor::MarkdownEditor;
 use super::state::PrModel;
-use crate::{app, backend, theme};
+use crate::{app, backend, theme, video};
 use gpui_kit::component::{
     button::{Button, ButtonVariant, ButtonVariants as _},
     input::{Escape, InputEvent},
@@ -368,7 +368,7 @@ impl ThreadView {
                 Some(form) => form.into_any_element(),
                 None => div()
                     .text_sm()
-                    .child(TextView::markdown(("comment-body", c.id), c.body.clone()))
+                    .child(TextView::markdown(("comment-body", c.id), c.body.clone()).plugin(video::Videos))
                     .into_any_element(),
             })
     }

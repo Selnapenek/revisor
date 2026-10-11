@@ -14,3 +14,13 @@ gpui-kit = { version = "0.7", features = ["tree-sitter-languages"] }
 reqwest_client = { package = "gpui-pre-reqwest-client", version = "=0.3.7" }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 base64 = "0.22"
+
+# In-app video playback: AVPlayer decodes, GPUI's `surface` draws the CVPixelBuffers.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSDictionary", "NSError", "NSString", "NSURL", "NSValue"] }
+objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["std", "AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "objc2-core-foundation", "objc2-core-media", "objc2-core-video"] }
+objc2-core-media = { version = "0.3.2", default-features = false, features = ["std", "CMTime"] }
+# Same versions GPUI uses for `SurfaceSource`.
+core-video = "0.5.2"
+core-foundation = "0.10"

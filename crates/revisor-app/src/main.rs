@@ -3,6 +3,7 @@ mod appearance;
 mod backend;
 mod screens;
 mod theme;
+mod video;
 
 use gpui_kit::component::{ThemeRegistry, TitleBar};
 use gpui_kit::*;

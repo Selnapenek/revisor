@@ -8,7 +8,7 @@ use gpui_kit::component::{
     text::TextView,
     *,
 };
-use crate::backend;
+use crate::{backend, video};
 use gpui_kit::{prelude::*, *};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use std::{collections::HashMap, ops::Range, path::PathBuf};
@@ -185,10 +185,12 @@ impl MarkdownEditor {
     }
 
     /// Insert a placeholder at the cursor, upload in the background, then swap in the link (or drop it on error).
+    /// `local` is the file on disk, if any: uploaded videos play from it.
     fn upload(
         &mut self,
         name: String,
         load: impl FnOnce() -> std::io::Result<Vec<u8>> + Send + 'static,
+        local: Option<PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -215,7 +217,15 @@ impl MarkdownEditor {
             },
             move |this: &mut Self, result, window, cx| {
                 this.uploading -= 1;
+                let video = mime.starts_with("video/");
                 let link = match result {
+                    // Like github.com: a bare URL in its own paragraph, which renders as a player.
+                    Ok((url, _)) if video => {
+                        if let Some(path) = local {
+                            video::remember_local(url.clone(), path, cx);
+                        }
+                        url
+                    }
                     Ok((url, data)) => {
                         let link = link_for(&name, mime, &url);
                         this.images.extend(data.map(|data| (url, data)));
@@ -228,7 +238,9 @@ impl MarkdownEditor {
                 };
                 this.input.update(cx, |input, cx| {
                     // The user may have deleted the placeholder meanwhile.
-                    let Some(start) = input.value().find(&placeholder) else { return };
+                    let value = input.value();
+                    let Some(start) = value.find(&placeholder) else { return };
+                    let link = if video && !link.is_empty() { video::video_block(&value[..start], &link) } else { link };
                     let span = start..start + placeholder.len();
                     let sel = input.selected_range();
                     input.set_selected_range(span.clone(), cx);
@@ -243,8 +255,8 @@ impl MarkdownEditor {
     fn upload_paths(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
         for path in paths.iter().filter(|p| p.is_file()) {
             let name = path.file_name().map_or("file".into(), |n| n.to_string_lossy().into_owned());
-            let path = path.clone();
-            self.upload(name, move || std::fs::read(path), window, cx);
+            let (path, local) = (path.clone(), path.clone());
+            self.upload(name, move || std::fs::read(path), Some(local), window, cx);
         }
     }
 
@@ -272,7 +284,7 @@ impl MarkdownEditor {
             match entry {
                 ClipboardEntry::Image(image) if !has_text => {
                     let bytes = image.bytes.clone();
-                    self.upload(format!("image.{}", image.format.extension()), move || Ok(bytes), window, cx);
+                    self.upload(format!("image.{}", image.format.extension()), move || Ok(bytes), None, window, cx);
                     handled = true;
                 }
                 ClipboardEntry::ExternalPaths(paths) => {
@@ -371,7 +383,7 @@ impl Render for MarkdownEditor {
                     el.child(div().py_2().text_xs().text_color(theme.muted_foreground).child("Nothing to preview"))
                 } else {
                     let body = self.images.iter().fold(body, |body, (url, data)| body.replace(url.as_str(), data));
-                    el.child(div().text_xs().child(TextView::markdown(("md-preview", cx.entity_id().as_u64()), body)))
+                    el.child(div().text_xs().child(TextView::markdown(("md-preview", cx.entity_id().as_u64()), body).plugin(video::Videos)))
                 }
             })
             .children(self.upload_error.clone().map(|e| div().text_xs().text_color(theme.danger).child(e)))

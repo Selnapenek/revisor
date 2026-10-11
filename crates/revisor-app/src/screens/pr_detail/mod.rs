@@ -13,7 +13,7 @@ mod syntax;
 pub mod state;
 
 use crate::app;
-use crate::{backend, theme};
+use crate::{backend, theme, video};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     resizable::{h_resizable, resizable_panel},
@@ -225,7 +225,7 @@ impl PrDetailScreen {
                 .px_4()
                 .py_3()
                 .text_sm()
-                .child(TextView::markdown("pr-description", body))
+                .child(TextView::markdown("pr-description", body).plugin(video::Videos))
                 .overflow_y_scrollbar(),
         )
     }

@@ -226,6 +226,9 @@ pub trait GitProvider: Send + Sync {
         bytes: Vec<u8>,
     ) -> Result<String>;
 
+    /// Short-lived direct link for an attachment URL that needs the user's token to load
+    async fn resolve_attachment(&self, url: &str) -> Result<String>;
+
     /// Get current rate limit status
     fn rate_limit_status(&self) -> RateLimitInfo;
 }

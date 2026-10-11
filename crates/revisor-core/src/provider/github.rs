@@ -1267,6 +1267,34 @@ impl GitProvider for GithubProvider {
         Ok(asset.url)
     }
 
+    /// Private-repo attachments 404 without auth; with the token GitHub redirects to a
+    /// signed S3 URL that is valid for 5 minutes.
+    async fn resolve_attachment(&self, url: &str) -> Result<String> {
+        // Never send the token anywhere but github.com.
+        if !url.starts_with("https://github.com/") {
+            bail!("Not a GitHub attachment URL: {}", url);
+        }
+        let client = Client::builder()
+            .user_agent("Revisor/1.0.0")
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .context("Failed to create HTTP client")?;
+        let response = client
+            .get(url)
+            .header("Authorization", format!("token {}", self.token))
+            .send()
+            .await
+            .context("Network request failed")?;
+        let status = response.status();
+        match response.headers().get(reqwest::header::LOCATION).and_then(|l| l.to_str().ok()) {
+            Some(location) if status.is_redirection() => Ok(location.to_string()),
+            _ if status == reqwest::StatusCode::NOT_FOUND => {
+                bail!("GitHub did not find the attachment, or you have no access to its repository")
+            }
+            _ => bail!("GitHub returned {} for the attachment", status),
+        }
+    }
+
     fn rate_limit_status(&self) -> RateLimitInfo {
         self.rate_limit.info()
     }

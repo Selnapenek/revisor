@@ -1,7 +1,7 @@
 //! Conversations tab: timeline of threads, issue comments and reviews; AI ranking of review findings.
 
 use super::state::{CommitSelection, PrModel, ScrollTarget};
-use crate::{backend, theme};
+use crate::{backend, theme, video};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
@@ -298,7 +298,7 @@ impl ConversationsPanel {
                     .child(div().flex_1())
                     .child(badge),
             )
-            .child(div().text_xs().child(TextView::markdown((kind, id), body.to_string())))
+            .child(div().text_xs().child(TextView::markdown((kind, id), body.to_string()).plugin(video::Videos)))
             .child(
                 Button::new(SharedString::from(format!("{kind}-open-{id}")))
                     .link()
