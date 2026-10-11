@@ -999,7 +999,8 @@ impl Render for DiffView {
                     )))
                 })
         } else {
-            // Pin the header of the file at the top of the viewport.
+            // Pin the header of the file at the top of the viewport. It blocks clicks so the real
+            // header below it does not get the same click (a double toggle).
             let top = self.rows.get(self.list.logical_scroll_top().item_ix).map(|r| r.file());
             div()
                 .relative()
@@ -1008,7 +1009,14 @@ impl Render for DiffView {
                 .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, cx| this.end_drag(cx)))
                 .child(gpui_kit::list(self.list.clone(), cx.processor(Self::render_row)).size_full())
                 .children(top.map(|fi| {
-                    div().id("sticky-file-header").absolute().top_0().left_0().right_0().child(self.file_header(fi, model, cx))
+                    div()
+                        .id("sticky-file-header")
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .block_mouse_except_scroll()
+                        .child(self.file_header(fi, model, cx))
                 }))
                 .vertical_scrollbar(&self.list)
         };
