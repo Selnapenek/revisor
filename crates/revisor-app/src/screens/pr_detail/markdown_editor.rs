@@ -8,8 +8,10 @@ use gpui_kit::component::{
     text::TextView,
     *,
 };
+use crate::backend;
 use gpui_kit::{prelude::*, *};
-use std::ops::Range;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use std::{collections::HashMap, ops::Range, path::PathBuf};
 
 actions!(markdown_editor, [Bold, Italic, Code, Link]);
 
@@ -96,10 +98,64 @@ fn format(text: &str, sel: Range<usize>, kind: Format) -> (Range<usize>, String,
     (line_start..line_end, new, new_sel)
 }
 
+/// MIME type GitHub stores an attachment under, from its file name.
+fn mime_for(name: &str) -> &'static str {
+    let ext = name.rsplit_once('.').map_or("", |(_, ext)| ext).to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "tif" | "tiff" => "image/tiff",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "gz" => "application/gzip",
+        "json" => "application/json",
+        "csv" => "text/csv",
+        "txt" | "log" => "text/plain",
+        "md" => "text/markdown",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Markdown for an uploaded attachment: images as an `<img>` tag (like github.com, easy to resize), everything else links.
+fn link_for(name: &str, mime: &str, url: &str) -> String {
+    if mime.starts_with("image/") {
+        let alt = name.replace('&', "&amp;").replace('"', "&quot;");
+        format!(r#"<img alt="{alt}" src="{url}" />"#)
+    } else {
+        format!("[{name}]({url})")
+    }
+}
+
+/// Where byte offset `i` lands after `span` is replaced by `new_len` bytes; inside the span goes to its end.
+fn shift(i: usize, span: &Range<usize>, new_len: usize) -> usize {
+    if i >= span.end {
+        i - span.len() + new_len
+    } else if i > span.start {
+        span.start + new_len
+    } else {
+        i
+    }
+}
+
 pub struct MarkdownEditor {
     pub input: Entity<TextareaState>,
+    /// Owner and name of the repository attachments are uploaded to.
+    repo: (SharedString, SharedString),
     preview: bool,
     disabled: bool,
+    /// Attachments still uploading; their placeholders are in the text.
+    uploading: usize,
+    upload_error: Option<String>,
+    /// Uploaded image URL to a `data:` URL of its bytes. Preview shows these, because
+    /// private-repo attachment URLs need a github.com browser session to load.
+    images: HashMap<String, String>,
 }
 
 impl MarkdownEditor {
@@ -107,6 +163,7 @@ impl MarkdownEditor {
         initial: &str,
         placeholder: &'static str,
         (min_rows, max_rows): (usize, usize),
+        repo: (SharedString, SharedString),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -115,11 +172,117 @@ impl MarkdownEditor {
             TextareaState::new(window, cx).auto_grow(min_rows, max_rows).placeholder(placeholder).default_value(initial)
         });
         input.update(cx, |input, cx| input.focus(window, cx));
-        Self { input, preview: false, disabled: false }
+        Self { input, repo, preview: false, disabled: false, uploading: 0, upload_error: None, images: HashMap::new() }
     }
 
     pub fn value(&self, cx: &App) -> String {
         self.input.read(cx).value().trim().to_string()
+    }
+
+    /// Submitting now would post upload placeholders instead of links.
+    pub fn uploading(&self) -> bool {
+        self.uploading > 0
+    }
+
+    /// Insert a placeholder at the cursor, upload in the background, then swap in the link (or drop it on error).
+    fn upload(
+        &mut self,
+        name: String,
+        load: impl FnOnce() -> std::io::Result<Vec<u8>> + Send + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.disabled {
+            return;
+        }
+        let mime = mime_for(&name);
+        let placeholder = format!("![Uploading {name}…]()");
+        self.uploading += 1;
+        self.upload_error = None;
+        self.input.update(cx, |input, cx| input.replace(format!("{placeholder}\n"), window, cx));
+        cx.notify();
+
+        let (owner, repo, file) = (self.repo.0.to_string(), self.repo.1.to_string(), name.clone());
+        backend::spawn(
+            window,
+            cx,
+            move |s| async move {
+                let bytes = load().map_err(backend::err)?;
+                // Only formats GPUI can decode; others stay links in the preview.
+                let data = ImageFormat::from_mime_type(mime).map(|_| format!("data:{mime};base64,{}", BASE64.encode(&bytes)));
+                let url = s.provider().await?.upload_attachment(&owner, &repo, &file, mime, bytes).await.map_err(backend::err)?;
+                Ok((url, data))
+            },
+            move |this: &mut Self, result, window, cx| {
+                this.uploading -= 1;
+                let link = match result {
+                    Ok((url, data)) => {
+                        let link = link_for(&name, mime, &url);
+                        this.images.extend(data.map(|data| (url, data)));
+                        link
+                    }
+                    Err(e) => {
+                        this.upload_error = Some(format!("Failed to upload {name}: {e}"));
+                        String::new()
+                    }
+                };
+                this.input.update(cx, |input, cx| {
+                    // The user may have deleted the placeholder meanwhile.
+                    let Some(start) = input.value().find(&placeholder) else { return };
+                    let span = start..start + placeholder.len();
+                    let sel = input.selected_range();
+                    input.set_selected_range(span.clone(), cx);
+                    input.replace(link.clone(), window, cx);
+                    input.set_selected_range(shift(sel.start, &span, link.len())..shift(sel.end, &span, link.len()), cx);
+                });
+            },
+        )
+        .detach();
+    }
+
+    fn upload_paths(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        for path in paths.iter().filter(|p| p.is_file()) {
+            let name = path.file_name().map_or("file".into(), |n| n.to_string_lossy().into_owned());
+            let path = path.clone();
+            self.upload(name, move || std::fs::read(path), window, cx);
+        }
+    }
+
+    fn pick_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = paths.await {
+                this.update_in(cx, |this, window, cx| this.upload_paths(&paths, window, cx)).ok();
+            }
+        })
+        .detach();
+    }
+
+    /// Upload pasted images and copied files; `false` lets plain text paste as usual.
+    fn paste(&mut self, item: &ClipboardItem, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        // Some apps put an image rendering next to copied text; text wins, like on github.com.
+        let has_text = item.entries().iter().any(|e| matches!(e, ClipboardEntry::String(_)));
+        let mut handled = false;
+        for entry in item.entries() {
+            match entry {
+                ClipboardEntry::Image(image) if !has_text => {
+                    let bytes = image.bytes.clone();
+                    self.upload(format!("image.{}", image.format.extension()), move || Ok(bytes), window, cx);
+                    handled = true;
+                }
+                ClipboardEntry::ExternalPaths(paths) => {
+                    self.upload_paths(paths.paths(), window, cx);
+                    handled = true;
+                }
+                _ => {}
+            }
+        }
+        handled
     }
 
     pub fn set_disabled(&mut self, disabled: bool, cx: &mut Context<Self>) {
@@ -153,9 +316,13 @@ impl Render for MarkdownEditor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let body = self.value(cx);
+        let drop_target = theme.drop_target;
+        let this = cx.entity().downgrade();
         v_flex()
             .gap_2()
             .key_context(CONTEXT)
+            .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(drop_target))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| this.upload_paths(paths.paths(), window, cx)))
             .on_action(cx.listener(|this, _: &Bold, window, cx| this.apply(Format::Bold, window, cx)))
             .on_action(cx.listener(|this, _: &Italic, window, cx| this.apply(Format::Italic, window, cx)))
             .on_action(cx.listener(|this, _: &Code, window, cx| this.apply(Format::Code, window, cx)))
@@ -184,24 +351,57 @@ impl Render for MarkdownEditor {
                                 .disabled(self.disabled)
                                 .on_click(cx.listener(move |this, _, window, cx| this.apply(kind, window, cx)))
                         }))
+                        .child(
+                            Button::new("md-attach")
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::Paperclip)
+                                .tooltip("Attach files (or paste / drop them)")
+                                .disabled(self.disabled)
+                                .on_click(cx.listener(|this, _, window, cx| this.pick_files(window, cx))),
+                        )
                     }),
             )
             .map(|el| {
                 if !self.preview {
-                    el.child(Textarea::new(&self.input).small().disabled(self.disabled))
+                    el.child(Textarea::new(&self.input).small().disabled(self.disabled).on_paste(move |item, window, cx| {
+                        this.update(cx, |this, cx| this.paste(item, window, cx)).unwrap_or(false)
+                    }))
                 } else if body.is_empty() {
                     el.child(div().py_2().text_xs().text_color(theme.muted_foreground).child("Nothing to preview"))
                 } else {
+                    let body = self.images.iter().fold(body, |body, (url, data)| body.replace(url.as_str(), data));
                     el.child(div().text_xs().child(TextView::markdown(("md-preview", cx.entity_id().as_u64()), body)))
                 }
             })
+            .children(self.upload_error.clone().map(|e| div().text_xs().text_color(theme.danger).child(e)))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{format, Format};
+    use super::{format, link_for, mime_for, shift, Format};
     use std::ops::Range;
+
+    #[test]
+    fn attachment_mime_and_link() {
+        assert_eq!(mime_for("Shot.PNG"), "image/png");
+        assert_eq!(mime_for("a.b.jpeg"), "image/jpeg");
+        assert_eq!(mime_for("Makefile"), "application/octet-stream");
+        assert_eq!(link_for("a.png", "image/png", "u"), r#"<img alt="a.png" src="u" />"#);
+        assert_eq!(link_for(r#""x"&y.png"#, "image/png", "u"), r#"<img alt="&quot;x&quot;&amp;y.png" src="u" />"#);
+        assert_eq!(link_for("a.pdf", "application/pdf", "u"), "[a.pdf](u)");
+    }
+
+    #[test]
+    fn cursor_follows_placeholder_swap() {
+        let span = 4..10; // 6-byte placeholder becomes 2 bytes
+        assert_eq!(shift(2, &span, 2), 2);
+        assert_eq!(shift(4, &span, 2), 4);
+        assert_eq!(shift(7, &span, 2), 6);
+        assert_eq!(shift(10, &span, 2), 6);
+        assert_eq!(shift(15, &span, 2), 11);
+    }
 
     /// Apply `format` and return the new text plus the newly selected slice.
     fn run(text: &str, sel: Range<usize>, kind: Format) -> (String, String) {

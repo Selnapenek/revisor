@@ -7103,6 +7103,7 @@ dependencies = [
 name = "revisor-app"
 version = "1.0.0"
 dependencies = [
+ "base64 0.22.1",
  "gpui-kit",
  "gpui-pre-reqwest-client",
  "revisor-core",

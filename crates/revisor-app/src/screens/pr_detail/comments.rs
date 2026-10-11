@@ -29,7 +29,7 @@ pub struct CommentForm {
     /// Label of a second, non-primary submit button; `None` hides it.
     pub alt_label: Option<&'static str>,
     busy: bool,
-    _subscription: Subscription,
+    _subscriptions: [Subscription; 2],
 }
 
 impl EventEmitter<CommentFormEvent> for CommentForm {}
@@ -39,16 +39,19 @@ impl CommentForm {
         initial: &str,
         placeholder: &'static str,
         submit_label: &'static str,
+        repo: (SharedString, SharedString),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let editor = cx.new(|cx| MarkdownEditor::new(initial, placeholder, (3, 12), window, cx));
+        let editor = cx.new(|cx| MarkdownEditor::new(initial, placeholder, (3, 12), repo, window, cx));
         let subscription = cx.subscribe(&editor.read(cx).input.clone(), |this, _, event: &InputEvent, cx| match event {
             InputEvent::PressEnter { secondary: true, .. } => this.submit(false, cx),
             InputEvent::Change => cx.notify(),
             _ => {}
         });
-        Self { editor, submit_label, alt_label: None, busy: false, _subscription: subscription }
+        // Re-render when uploads start or finish: submit is blocked meanwhile.
+        let observer = cx.observe(&editor, |_, _, cx| cx.notify());
+        Self { editor, submit_label, alt_label: None, busy: false, _subscriptions: [subscription, observer] }
     }
 
     /// Create a form owned by `V`; keep the returned subscription for as long as the form is shown.
@@ -56,11 +59,12 @@ impl CommentForm {
         initial: &str,
         placeholder: &'static str,
         submit_label: &'static str,
+        repo: (SharedString, SharedString),
         window: &mut Window,
         cx: &mut Context<V>,
         on_event: impl FnMut(&mut V, &Entity<CommentForm>, &CommentFormEvent, &mut Window, &mut Context<V>) + 'static,
     ) -> (Entity<CommentForm>, Subscription) {
-        let form = cx.new(|cx| CommentForm::new(initial, placeholder, submit_label, window, cx));
+        let form = cx.new(|cx| CommentForm::new(initial, placeholder, submit_label, repo, window, cx));
         let subscription = cx.subscribe_in(&form, window, on_event);
         (form, subscription)
     }
@@ -71,13 +75,17 @@ impl CommentForm {
         cx.notify();
     }
 
+    fn uploading(&self, cx: &App) -> bool {
+        self.editor.read(cx).uploading()
+    }
+
     fn body(&self, cx: &App) -> String {
         self.editor.read(cx).value(cx)
     }
 
     fn submit(&mut self, alt: bool, cx: &mut Context<Self>) {
         let body = self.body(cx);
-        if !self.busy && !body.is_empty() {
+        if !self.busy && !self.uploading(cx) && !body.is_empty() {
             cx.emit(if alt { CommentFormEvent::SubmitAlt(body) } else { CommentFormEvent::Submit(body) });
         }
     }
@@ -85,7 +93,7 @@ impl CommentForm {
 
 impl Render for CommentForm {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let empty = self.body(cx).is_empty();
+        let empty = self.body(cx).is_empty() || self.uploading(cx);
         v_flex()
             .gap_2()
             .on_action(cx.listener(|_, _: &Escape, _, cx| cx.emit(CommentFormEvent::Cancel)))
@@ -205,7 +213,8 @@ impl ThreadView {
 
     fn open_reply(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let root = self.root_id;
-        self.reply = Some(CommentForm::open("", "Write a reply...", "Reply", window, cx, move |this, form, event, window, cx| {
+        let repo = self.model.read(cx).repo_name();
+        self.reply = Some(CommentForm::open("", "Write a reply...", "Reply", repo, window, cx, move |this, form, event, window, cx| {
             match event {
                 CommentFormEvent::Cancel | CommentFormEvent::SubmitAlt(_) => this.reply = None,
                 CommentFormEvent::Submit(body) => {
@@ -231,7 +240,8 @@ impl ThreadView {
 
     fn open_edit(&mut self, comment: &ReviewComment, window: &mut Window, cx: &mut Context<Self>) {
         let (id, original) = (comment.id, comment.body.clone());
-        let (form, subscription) = CommentForm::open(&comment.body, "", "Save", window, cx, move |this, form, event, window, cx| {
+        let repo = self.model.read(cx).repo_name();
+        let (form, subscription) = CommentForm::open(&comment.body, "", "Save", repo, window, cx, move |this, form, event, window, cx| {
             match event {
                 CommentFormEvent::Submit(body) if *body != original => {
                     let ((o, r, _), body) = (this.repo(cx), body.clone());

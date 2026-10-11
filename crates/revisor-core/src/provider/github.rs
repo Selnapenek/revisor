@@ -1223,6 +1223,50 @@ impl GitProvider for GithubProvider {
         self.get_raw(&url).await
     }
 
+    /// Undocumented endpoint used by `gh --attach`; may change without notice.
+    /// See https://github.com/cli/cli/issues/14495 (needs `token`, not `Bearer`).
+    async fn upload_attachment(
+        &self,
+        owner: &str,
+        repo: &str,
+        name: &str,
+        content_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<String> {
+        #[derive(Deserialize)]
+        struct RepoId {
+            id: u64,
+        }
+        #[derive(Deserialize)]
+        struct Asset {
+            url: String,
+        }
+
+        // ponytail: one extra GET per upload; cache the id if uploads feel slow.
+        let RepoId { id } = self.get(&format!("https://api.github.com/repos/{}/{}", owner, repo)).await?;
+        let response = self
+            .client
+            .post("https://uploads.github.com/user-attachments/assets")
+            .query(&[("name", name), ("content_type", content_type), ("repository_id", &id.to_string())])
+            .header("Authorization", format!("token {}", self.token))
+            .header("Content-Type", "application/octet-stream")
+            .header("Accept", "application/json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .body(bytes)
+            .send()
+            .await
+            .context("Network request failed")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("GitHub upload error {}: {}", status, body);
+        }
+
+        let asset: Asset = response.json().await.context("Failed to parse upload response")?;
+        Ok(asset.url)
+    }
+
     fn rate_limit_status(&self) -> RateLimitInfo {
         self.rate_limit.info()
     }

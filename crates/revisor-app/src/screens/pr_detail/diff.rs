@@ -482,8 +482,9 @@ impl DiffView {
         let reviewing = self.model.read(cx).pending_review.is_some();
         let (primary, single) =
             if reviewing { ("Add review comment", "Add single comment") } else { ("Start a review", "Comment") };
+        let repo = self.model.read(cx).repo_name();
         let (form, subscription) =
-            CommentForm::open("", "Write a comment...", primary, window, cx, move |this, form, event, window, cx| {
+            CommentForm::open("", "Write a comment...", primary, repo, window, cx, move |this, form, event, window, cx| {
                 let (body, to_review) = match event {
                     CommentFormEvent::Submit(body) => (body, true),
                     CommentFormEvent::SubmitAlt(body) => (body, false),

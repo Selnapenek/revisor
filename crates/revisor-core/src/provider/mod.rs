@@ -216,6 +216,16 @@ pub trait GitProvider: Send + Sync {
         ref_: &str,
     ) -> Result<String>;
 
+    /// Upload a file for use in comment markdown; returns its URL
+    async fn upload_attachment(
+        &self,
+        owner: &str,
+        repo: &str,
+        name: &str,
+        content_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<String>;
+
     /// Get current rate limit status
     fn rate_limit_status(&self) -> RateLimitInfo;
 }

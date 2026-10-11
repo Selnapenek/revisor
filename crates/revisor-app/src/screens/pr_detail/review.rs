@@ -28,25 +28,27 @@ pub struct ReviewPanel {
     busy: bool,
     /// "Discard" was clicked once; the next click deletes the pending review.
     confirm_discard: bool,
-    _subscription: Subscription,
+    _subscriptions: [Subscription; 2],
     _task: Task<()>,
 }
 
 impl ReviewPanel {
     pub fn new(model: Entity<PrModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let editor = cx.new(|cx| MarkdownEditor::new("", "Leave a comment", (4, 12), window, cx));
+        let repo = model.read(cx).repo_name();
+        let editor = cx.new(|cx| MarkdownEditor::new("", "Leave a comment", (4, 12), repo, window, cx));
         let subscription = cx.subscribe(&editor.read(cx).input.clone(), |_, _, event: &InputEvent, cx| {
             if let InputEvent::Change = event {
                 cx.notify();
             }
         });
+        let observer = cx.observe(&editor, |_, _, cx| cx.notify());
         Self {
             model,
             editor,
             event: ReviewEvent::Comment,
             busy: false,
             confirm_discard: false,
-            _subscription: subscription,
+            _subscriptions: [subscription, observer],
             _task: Task::ready(()),
         }
     }
@@ -54,6 +56,7 @@ impl ReviewPanel {
     /// GitHub rejects Comment / Request changes with no body and no review comments.
     fn can_submit(&self, cx: &App) -> bool {
         !self.busy
+            && !self.editor.read(cx).uploading()
             && (self.event == ReviewEvent::Approve
                 || !self.editor.read(cx).value(cx).is_empty()
                 || self.model.read(cx).pending_count() > 0)

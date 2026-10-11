@@ -10,7 +10,7 @@ use gpui_kit::*;
 actions!(revisor, [Quit]);
 
 // Default `Assets` ships only the component icons; add the markdown toolbar ones.
-gpui_kit::assets::icon_assets!(EditorIcons, [Heading, Bold, Italic, TextQuote, Code, Link, List, ListOrdered, ListChecks]);
+gpui_kit::assets::icon_assets!(EditorIcons, [Heading, Bold, Italic, TextQuote, Code, Link, List, ListOrdered, ListChecks, Paperclip]);
 
 struct AppAssets;
 

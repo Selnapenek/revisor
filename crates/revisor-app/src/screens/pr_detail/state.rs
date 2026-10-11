@@ -92,6 +92,11 @@ pub struct PrModel {
 impl EventEmitter<PrEvent> for PrModel {}
 
 impl PrModel {
+    /// (owner, repo), e.g. for uploading comment attachments.
+    pub fn repo_name(&self) -> (SharedString, SharedString) {
+        (self.owner.clone(), self.repo.clone())
+    }
+
     pub fn new(
         owner: SharedString,
         repo: SharedString,
