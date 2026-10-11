@@ -1,10 +1,11 @@
 //! "Finish your review" dialog: body, Comment / Approve / Request changes, submit or discard.
 
+use super::markdown_editor::MarkdownEditor;
 use super::state::PrModel;
 use crate::backend;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
-    input::{InputEvent, Textarea, TextareaState},
+    input::InputEvent,
     notification::Notification,
     radio::{Radio, RadioGroup},
     *,
@@ -22,7 +23,7 @@ const EVENTS: [(ReviewEvent, &str, &str); 3] = [
 
 pub struct ReviewPanel {
     model: Entity<PrModel>,
-    input: Entity<TextareaState>,
+    editor: Entity<MarkdownEditor>,
     event: ReviewEvent,
     busy: bool,
     /// "Discard" was clicked once; the next click deletes the pending review.
@@ -33,16 +34,15 @@ pub struct ReviewPanel {
 
 impl ReviewPanel {
     pub fn new(model: Entity<PrModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| TextareaState::new(window, cx).auto_grow(4, 12).placeholder("Leave a comment"));
-        input.update(cx, |input, cx| input.focus(window, cx));
-        let subscription = cx.subscribe(&input, |_, _, event: &InputEvent, cx| {
+        let editor = cx.new(|cx| MarkdownEditor::new("", "Leave a comment", (4, 12), window, cx));
+        let subscription = cx.subscribe(&editor.read(cx).input.clone(), |_, _, event: &InputEvent, cx| {
             if let InputEvent::Change = event {
                 cx.notify();
             }
         });
         Self {
             model,
-            input,
+            editor,
             event: ReviewEvent::Comment,
             busy: false,
             confirm_discard: false,
@@ -55,7 +55,7 @@ impl ReviewPanel {
     fn can_submit(&self, cx: &App) -> bool {
         !self.busy
             && (self.event == ReviewEvent::Approve
-                || !self.input.read(cx).value().trim().is_empty()
+                || !self.editor.read(cx).value(cx).is_empty()
                 || self.model.read(cx).pending_count() > 0)
     }
 
@@ -63,7 +63,7 @@ impl ReviewPanel {
         let m = self.model.read(cx);
         let (o, r, n) = (m.owner.to_string(), m.repo.to_string(), m.number);
         let (pending, event) = (m.pending_review.as_ref().map(|p| p.id), self.event);
-        let body = self.input.read(cx).value().trim().to_string();
+        let body = self.editor.read(cx).value(cx);
         self.run(window, cx, "submit review", move |s| async move {
             s.provider().await?.submit_review(&o, &r, n, pending, event, &body).await.map_err(backend::err)
         });
@@ -83,6 +83,12 @@ impl ReviewPanel {
         });
     }
 
+    fn set_busy(&mut self, busy: bool, cx: &mut Context<Self>) {
+        self.busy = busy;
+        self.editor.update(cx, |editor, cx| editor.set_disabled(busy, cx));
+        cx.notify();
+    }
+
     /// Run a provider call; on success close the dialog and reload the PR, else show the error.
     fn run<Fut>(
         &mut self,
@@ -93,14 +99,13 @@ impl ReviewPanel {
     ) where
         Fut: Future<Output = Result<(), String>> + Send + 'static,
     {
-        self.busy = true;
-        cx.notify();
+        self.set_busy(true, cx);
         self._task = backend::spawn(
             window,
             cx,
             call,
             move |this: &mut Self, result, window, cx| {
-                this.busy = false;
+                this.set_busy(false, cx);
                 this.confirm_discard = false;
                 match result {
                     Ok(()) => {
@@ -126,7 +131,7 @@ impl Render for ReviewPanel {
 
         v_flex()
             .gap_3()
-            .child(Textarea::new(&self.input).disabled(self.busy))
+            .child(self.editor.clone())
             .child(
                 RadioGroup::new("review-event")
                     .selected_index(selected)

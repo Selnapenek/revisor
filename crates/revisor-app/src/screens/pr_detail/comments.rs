@@ -1,10 +1,11 @@
 //! Inline comment thread widgets, shared by the diff and the conversations panel.
 
+use super::markdown_editor::MarkdownEditor;
 use super::state::PrModel;
 use crate::{app, backend, theme};
 use gpui_kit::component::{
     button::{Button, ButtonVariant, ButtonVariants as _},
-    input::{Escape, InputEvent, Textarea, TextareaState},
+    input::{Escape, InputEvent},
     notification::Notification,
     text::TextView,
     *,
@@ -21,9 +22,9 @@ pub enum CommentFormEvent {
     Cancel,
 }
 
-/// Markdown textarea with Cancel / submit buttons. Cmd+Enter submits, Escape cancels.
+/// Markdown editor with Cancel / submit buttons. Cmd+Enter submits, Escape cancels.
 pub struct CommentForm {
-    input: Entity<TextareaState>,
+    editor: Entity<MarkdownEditor>,
     submit_label: &'static str,
     /// Label of a second, non-primary submit button; `None` hides it.
     pub alt_label: Option<&'static str>,
@@ -41,17 +42,13 @@ impl CommentForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let initial = initial.to_string();
-        let input = cx.new(|cx| {
-            TextareaState::new(window, cx).auto_grow(3, 12).placeholder(placeholder).default_value(initial)
-        });
-        input.update(cx, |input, cx| input.focus(window, cx));
-        let subscription = cx.subscribe(&input, |this, _, event: &InputEvent, cx| match event {
+        let editor = cx.new(|cx| MarkdownEditor::new(initial, placeholder, (3, 12), window, cx));
+        let subscription = cx.subscribe(&editor.read(cx).input.clone(), |this, _, event: &InputEvent, cx| match event {
             InputEvent::PressEnter { secondary: true, .. } => this.submit(false, cx),
             InputEvent::Change => cx.notify(),
             _ => {}
         });
-        Self { input, submit_label, alt_label: None, busy: false, _subscription: subscription }
+        Self { editor, submit_label, alt_label: None, busy: false, _subscription: subscription }
     }
 
     /// Create a form owned by `V`; keep the returned subscription for as long as the form is shown.
@@ -70,11 +67,12 @@ impl CommentForm {
 
     pub fn set_busy(&mut self, busy: bool, cx: &mut Context<Self>) {
         self.busy = busy;
+        self.editor.update(cx, |editor, cx| editor.set_disabled(busy, cx));
         cx.notify();
     }
 
     fn body(&self, cx: &App) -> String {
-        self.input.read(cx).value().trim().to_string()
+        self.editor.read(cx).value(cx)
     }
 
     fn submit(&mut self, alt: bool, cx: &mut Context<Self>) {
@@ -91,7 +89,7 @@ impl Render for CommentForm {
         v_flex()
             .gap_2()
             .on_action(cx.listener(|_, _: &Escape, _, cx| cx.emit(CommentFormEvent::Cancel)))
-            .child(Textarea::new(&self.input).small().disabled(self.busy))
+            .child(self.editor.clone())
             .child(
                 h_flex()
                     .gap_2()
@@ -100,7 +98,7 @@ impl Render for CommentForm {
                             .flex_1()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Markdown supported · ⌘Enter to submit"),
+                            .child("⌘Enter to submit"),
                     )
                     .child(
                         Button::new("cancel")

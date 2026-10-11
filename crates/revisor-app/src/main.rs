@@ -9,9 +9,31 @@ use gpui_kit::*;
 
 actions!(revisor, [Quit]);
 
+// Default `Assets` ships only the component icons; add the markdown toolbar ones.
+gpui_kit::assets::icon_assets!(EditorIcons, [Heading, Bold, Italic, TextQuote, Code, Link, List, ListOrdered, ListChecks]);
+
+struct AppAssets;
+
+impl AssetSource for AppAssets {
+    fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        match EditorIcons.load(path)? {
+            Some(bytes) => Ok(Some(bytes)),
+            None => gpui_kit::assets::Assets.load(path),
+        }
+    }
+
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        let mut paths = gpui_kit::assets::Assets.list(path)?;
+        paths.extend(EditorIcons.list(path)?);
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
+}
+
 fn main() {
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(AppAssets)
         .with_http_client(std::sync::Arc::new(reqwest_client::ReqwestClient::new()))
         .run(|cx| {
             gpui_kit::init(cx);

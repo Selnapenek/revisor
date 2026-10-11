@@ -6,6 +6,7 @@ mod commits;
 mod conversations;
 mod diff;
 mod files;
+mod markdown_editor;
 mod review;
 mod semantic;
 mod syntax;
@@ -35,6 +36,7 @@ const SIDEBAR_DEFAULT: f32 = 260.;
 const DESCRIPTION_WIDTH: f32 = 340.;
 
 pub fn init(cx: &mut App) {
+    markdown_editor::init(cx);
     cx.bind_keys([
         KeyBinding::new("cmd-f", ToggleSearch, Some(CONTEXT)),
         KeyBinding::new("cmd-p", FocusFileFilter, Some(CONTEXT)),
