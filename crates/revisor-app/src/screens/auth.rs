@@ -1,6 +1,6 @@
 //! GitHub device-flow sign-in, with a personal access token fallback.
 
-use crate::{app, backend};
+use crate::{app, backend, theme};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
@@ -184,21 +184,35 @@ impl Render for AuthScreen {
                 .child(
                     v_flex()
                         .items_center()
-                        .p_4()
-                        .gap_2()
-                        .rounded_md()
-                        .border_1()
+                        .py_4()
+                        .gap_3()
+                        .border_y_1()
                         .border_color(theme.border)
-                        .bg(theme.secondary)
-                        .child(div().text_xs().text_color(theme.muted_foreground).child("Enter this code on GitHub"))
+                        .child(theme::eyebrow("Enter this code on GitHub", cx))
+                        .child(h_flex().gap_1().font_family(theme.mono_font_family.clone()).text_xl().children(
+                            login.user_code.chars().map(|c| {
+                                if c == '-' {
+                                    div().px_1().text_color(theme.muted_foreground).child("-")
+                                } else {
+                                    div()
+                                        .w(px(32.))
+                                        .h(px(40.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .border_1()
+                                        .border_color(theme.border)
+                                        .child(c.to_string())
+                                }
+                            }),
+                        ))
                         .child(
                             div()
-                                .text_2xl()
-                                .font_bold()
                                 .font_family(theme.mono_font_family.clone())
-                                .child(login.user_code.clone()),
-                        )
-                        .child(div().text_xs().text_color(theme.muted_foreground).child(uri.clone())),
+                                .text_xs()
+                                .text_color(theme.muted_foreground)
+                                .child(uri.clone()),
+                        ),
                 )
                 .children(error)
                 .child(
@@ -274,13 +288,20 @@ impl Render for AuthScreen {
                 .child(
                     v_flex()
                         .items_center()
-                        .gap_2()
-                        .child(div().text_2xl().font_bold().child("Revisor"))
+                        .gap_1()
+                        .child(
+                            h_flex()
+                                .gap_3()
+                                .child(div().w(px(2.)).h(px(32.)).bg(theme.primary))
+                                .child(div().font_family(theme.mono_font_family.clone()).text_size(rems(2.75)).line_height(rems(3.)).child("Revisor")),
+                        )
                         .child(
                             div()
-                                .text_sm()
+                                .font_family(theme.mono_font_family.clone())
+                                .italic()
+                                .text_lg()
                                 .text_color(theme.muted_foreground)
-                                .child("Fast, offline-capable code review"),
+                                .child("Every change, proofed."),
                         ),
                 )
                 .child(body),

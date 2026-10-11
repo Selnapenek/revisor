@@ -31,6 +31,15 @@ where
     async move { handle.await.map_err(|e| e.to_string())? }
 }
 
+/// Run `f` on tokio and wait for it. Startup only: it blocks the UI thread.
+pub fn block_on<T, Fut>(cx: &App, f: impl FnOnce(Arc<AppState>) -> Fut) -> Result<T, String>
+where
+    Fut: Future<Output = Result<T, String>>,
+{
+    let backend = cx.global::<Backend>();
+    backend.runtime.block_on(f(backend.state.clone()))
+}
+
 /// Run `f` on tokio, then hand the result to `done` on the view. Drop the task to ignore the result.
 pub fn spawn<V: 'static, T, Fut>(
     window: &Window,

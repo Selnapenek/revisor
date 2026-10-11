@@ -1,13 +1,20 @@
 //! Root view: routing, session, status bar.
 
 use crate::{backend, theme};
-use crate::screens::{auth::AuthScreen, pr_detail::PrDetailScreen, pr_list::PrListScreen, repos::ReposScreen};
-use gpui_kit::component::{notification::Notification, spinner::Spinner, *};
+use crate::screens::{
+    auth::AuthScreen, pr_detail::PrDetailScreen, pr_list::PrListScreen, repos::ReposScreen, settings::SettingsScreen,
+};
+use gpui_kit::component::{
+    button::{Button, ButtonVariants as _},
+    notification::Notification,
+    spinner::Spinner,
+    *,
+};
 use gpui_kit::{prelude::*, *};
 use revisor_core::provider::types::{ProviderUser, RateLimitInfo};
 use std::time::Duration;
 
-actions!(revisor_nav, [GoBack]);
+actions!(revisor_nav, [GoBack, OpenSettings]);
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Route {
@@ -15,6 +22,8 @@ pub enum Route {
     Repos,
     PrList { owner: SharedString, repo: SharedString },
     PrDetail { owner: SharedString, repo: SharedString, number: u64 },
+    /// Back returns to the screen settings was opened from.
+    Settings { back: Box<Route> },
 }
 
 impl Route {
@@ -23,6 +32,7 @@ impl Route {
         match self {
             Route::PrDetail { owner, repo, .. } => Some(Route::PrList { owner: owner.clone(), repo: repo.clone() }),
             Route::PrList { .. } => Some(Route::Repos),
+            Route::Settings { back } => Some((**back).clone()),
             Route::Auth | Route::Repos => None,
         }
     }
@@ -43,6 +53,17 @@ pub fn go_back(window: &mut Window, cx: &mut App) {
     root.update(cx, |root, cx| {
         if let Some(route) = root.route.parent() {
             root.go(route, window, cx);
+        }
+    })
+    .ok();
+}
+
+/// Open settings over the current screen; Back returns to it (rebuilt, so new sizes apply).
+pub fn open_settings(window: &mut Window, cx: &mut App) {
+    let root = cx.global::<Nav>().0.clone();
+    root.update(cx, |root, cx| {
+        if !matches!(root.route, Route::Settings { .. }) {
+            root.go(Route::Settings { back: Box::new(root.route.clone()) }, window, cx);
         }
     })
     .ok();
@@ -83,6 +104,7 @@ pub struct AppRoot {
     screen: Option<AnyView>,
     user: Option<ProviderUser>,
     rate: Option<RateLimitInfo>,
+    nav: usize,
     _poll: Task<()>,
     _restore: Task<()>,
 }
@@ -121,7 +143,7 @@ impl AppRoot {
             }
             cx.background_executor().timer(Duration::from_secs(30)).await;
         });
-        Self { route: Route::Auth, screen: None, user: None, rate: None, _poll: poll, _restore: restore }
+        Self { route: Route::Auth, screen: None, user: None, rate: None, nav: 0, _poll: poll, _restore: restore }
     }
 
     fn go(&mut self, route: Route, window: &mut Window, cx: &mut Context<Self>) {
@@ -137,8 +159,10 @@ impl AppRoot {
             Route::PrDetail { owner, repo, number } => cx
                 .new(|cx| PrDetailScreen::new(owner.clone(), repo.clone(), *number, window, cx))
                 .into(),
+            Route::Settings { .. } => cx.new(|cx| SettingsScreen::new(window, cx)).into(),
         });
         self.route = route;
+        self.nav += 1;
         cx.notify();
     }
 
@@ -153,19 +177,33 @@ impl AppRoot {
             .h_6()
             .flex_shrink_0()
             .px_3()
-            .gap_4()
-            .text_xs()
+            .gap_1()
+            .font_family(theme.mono_font_family.clone())
+            .text_size(rems(0.625))
             .text_color(theme.muted_foreground)
             .bg(theme.status_bar)
             .border_t_1()
             .border_color(theme.status_bar_border)
-            .child("Revisor")
+            .child("REVISOR")
             .children(self.rate.as_ref().map(|r| {
-                div().text_color(rate_color).child(format!("API: {}/{}", r.remaining, r.limit))
+                div().text_color(rate_color).child(format!("— API {}/{}", thousands(r.remaining), thousands(r.limit)))
             }))
             .children(self.user.as_ref().map(|u| {
-                h_flex().ml_auto().gap_1().child(theme::avatar(&u.login, &u.avatar_url)).child(u.login.clone())
+                h_flex()
+                    .ml_auto()
+                    .gap_1()
+                    .child(theme::avatar(&u.login, &u.avatar_url))
+                    .child(format!("@{}", u.login))
             }))
+            .child(
+                Button::new("settings")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Settings)
+                    .tooltip("Settings (⌘,)")
+                    .when(self.user.is_none(), |b| b.ml_auto())
+                    .on_click(|_, window, cx| open_settings(window, cx)),
+            )
     }
 }
 
@@ -176,16 +214,52 @@ impl Render for AppRoot {
         v_flex()
             .size_full()
             .text_color(theme.foreground)
-            .child(TitleBar::new().child(div().text_xs().font_medium().text_color(theme.muted_foreground).child("Revisor")))
+            .child(
+                TitleBar::new().child(
+                    h_flex()
+                        .gap_2()
+                        .child(div().w(px(2.)).h(px(12.)).bg(theme.primary))
+                        .child(
+                            div()
+                                .font_family(theme.mono_font_family.clone())
+                                .text_base()
+                                .text_color(theme.muted_foreground)
+                                .child("Revisor"),
+                        ),
+                ),
+            )
             .child(match &self.screen {
-                Some(screen) => div().flex_1().overflow_hidden().child(screen.clone()),
+                Some(screen) => div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .child(screen.clone())
+                    .with_animation(
+                        ("screen", self.nav),
+                        Animation::new(Duration::from_millis(160)).with_easing(ease_out_quint()),
+                        |el, d| el.opacity(d),
+                    )
+                    .into_any_element(),
                 None => div()
                     .flex_1()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(Spinner::new().large()),
+                    .child(Spinner::new().large())
+                    .into_any_element(),
             })
             .when(self.user.is_some(), |el| el.child(self.status_bar(cx)))
     }
+}
+
+/// `4812` → `4,812`.
+fn thousands(n: impl ToString) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }

@@ -1,9 +1,10 @@
 mod app;
+mod appearance;
 mod backend;
 mod screens;
 mod theme;
 
-use gpui_kit::component::{Theme, ThemeMode, ThemeRegistry, TitleBar};
+use gpui_kit::component::{ThemeRegistry, TitleBar};
 use gpui_kit::*;
 
 actions!(revisor, [Quit]);
@@ -14,12 +15,22 @@ fn main() {
         .with_http_client(std::sync::Arc::new(reqwest_client::ReqwestClient::new()))
         .run(|cx| {
             gpui_kit::init(cx);
+            cx.text_system()
+                .add_fonts(
+                    [
+                        &include_bytes!("../assets/fonts/JetBrainsMono-Regular.ttf")[..],
+                        include_bytes!("../assets/fonts/JetBrainsMono-Italic.ttf"),
+                        include_bytes!("../assets/fonts/JetBrainsMono-Medium.ttf"),
+                        include_bytes!("../assets/fonts/JetBrainsMono-SemiBold.ttf"),
+                    ]
+                    .map(std::borrow::Cow::Borrowed)
+                    .into(),
+                )
+                .expect("bundled fonts are valid");
             let registry = ThemeRegistry::global_mut(cx);
             registry.load_themes_from_str(include_str!("theme.json")).expect("theme.json is valid");
-            let dark = registry.themes()["Revisor Dark"].clone();
-            Theme::global_mut(cx).dark_theme = dark;
-            Theme::change(ThemeMode::Dark, None, cx);
             backend::init(cx);
+            appearance::init(cx);
             screens::pr_detail::init(cx);
 
             cx.on_action(|_: &Quit, cx| cx.quit());
@@ -31,10 +42,25 @@ fn main() {
                     }
                 })
             });
-            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None), KeyBinding::new("cmd-[", app::GoBack, None)]);
+            cx.on_action(|_: &app::OpenSettings, cx| {
+                cx.defer(|cx| {
+                    if let Some(window) = cx.active_window() {
+                        window.update(cx, |_, window, cx| app::open_settings(window, cx)).ok();
+                    }
+                })
+            });
+            cx.bind_keys([
+                KeyBinding::new("cmd-q", Quit, None),
+                KeyBinding::new("cmd-[", app::GoBack, None),
+                KeyBinding::new("cmd-,", app::OpenSettings, None),
+            ]);
             cx.set_menus([Menu {
                 name: "Revisor".into(),
-                items: vec![MenuItem::action("Quit Revisor", Quit)],
+                items: vec![
+                    MenuItem::action("Settings…", app::OpenSettings),
+                    MenuItem::separator(),
+                    MenuItem::action("Quit Revisor", Quit),
+                ],
                 disabled: false,
             }]);
             cx.on_window_closed(|cx, _| cx.quit()).detach();

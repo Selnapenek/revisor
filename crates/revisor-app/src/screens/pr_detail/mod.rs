@@ -18,7 +18,6 @@ use gpui_kit::component::{
     spinner::Spinner,
     tab::{Tab, TabBar},
     scroll::ScrollableElement as _,
-    tag::Tag,
     text::TextView,
     *,
 };
@@ -117,7 +116,6 @@ impl PrDetailScreen {
             .py_2()
             .border_b_1()
             .border_color(cx.theme().border)
-            .bg(cx.theme().secondary)
             .child(
                 Button::new("back")
                     .ghost()
@@ -132,42 +130,43 @@ impl PrDetailScreen {
                     cx.notify();
                 }),
             ))
+            // Two lines: the PR title (prose, body font) over one quiet meta line.
             .children(model.pr.as_ref().map(|pr| {
-                let tag = if pr.merged_at.is_some() {
-                    Tag::color(ColorName::Purple).child("Merged")
-                } else if pr.state == "closed" {
-                    Tag::color(ColorName::Red).child("Closed")
-                } else if pr.draft {
-                    Tag::secondary().child("Draft")
-                } else {
-                    Tag::color(ColorName::Green).child("Open")
-                };
-                h_flex()
-                    .gap_3()
+                let theme = cx.theme();
+                let mono = theme.mono_font_family.clone();
+                v_flex()
+                    .flex_1()
                     .min_w_0()
-                    .child(tag.small())
-                    .child(div().text_sm().font_medium().truncate().child(pr.title.clone()))
+                    .gap_0p5()
+                    .pl_3()
+                    .border_l_1()
+                    .border_color(theme.border)
+                    .child(div().text_base().font_medium().truncate().child(pr.title.clone()))
                     .child(
                         h_flex()
-                            .flex_shrink_0()
-                            .gap_1()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!("#{} ·", pr.number))
-                            .child(theme::avatar(&pr.author_login, &pr.author_avatar))
-                            .child(format!("{} · {}", pr.author_login, relative_time(&pr.updated_at))),
-                    )
-                    .child(
-                        div()
                             .min_w_0()
-                            .truncate()
+                            .gap_2()
                             .text_xs()
-                            .font_family(cx.theme().mono_font_family.clone())
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!("{} ← {}", pr.base_ref, pr.head_ref)),
+                            .text_color(theme.muted_foreground)
+                            .child(theme::pr_state_stamp(pr.merged_at.is_some(), &pr.state, pr.draft, cx))
+                            .child(div().flex_shrink_0().font_family(mono.clone()).child(format!("#{}", pr.number)))
+                            .child(
+                                h_flex()
+                                    .flex_shrink_0()
+                                    .gap_1()
+                                    .child(theme::avatar(&pr.author_login, &pr.author_avatar))
+                                    .child(pr.author_login.clone()),
+                            )
+                            .child(div().flex_shrink_0().child(relative_time(&pr.updated_at)))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_family(mono)
+                                    .child(format!("{} ← {}", pr.base_ref, pr.head_ref)),
+                            ),
                     )
             }))
-            .child(div().flex_1())
             .children(model.pr.as_ref().map(|pr| {
                 let url = pr.html_url.clone();
                 Button::new("open-github")
@@ -216,7 +215,7 @@ impl PrDetailScreen {
                 .gap_2()
                 .max_w(px(480.))
                 .text_sm()
-                .child(div().font_medium().child(format!("Couldn't load pull request #{number}")))
+                .child(div().font_family(cx.theme().mono_font_family.clone()).text_2xl().child(format!("Couldn't load pull request #{number}")))
                 .child(div().text_xs().text_center().text_color(cx.theme().muted_foreground).child(error))
                 .child(
                     h_flex()

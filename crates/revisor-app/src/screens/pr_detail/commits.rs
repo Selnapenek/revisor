@@ -1,6 +1,7 @@
 //! Commit picker: all commits, one commit, or a Shift+click range.
 
 use super::state::{CommitSelection, PrModel};
+use crate::theme;
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     popover::Popover,
@@ -32,18 +33,20 @@ impl RenderOnce for CommitSelector {
             let (model, anchor) = (self.model.clone(), anchor.clone());
             h_flex()
                 .id("commit-all")
+                .relative()
                 .px_3()
                 .py_2()
-                .rounded_md()
+                .border_b_1()
+                .border_color(theme.border)
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.list_hover))
-                .when(selection == CommitSelection::All, |el| el.bg(theme.list_active))
+                .when(selection == CommitSelection::All, |el| el.child(theme::margin_mark(theme.primary)))
                 .on_click(move |_, _, cx| {
                     anchor.update(cx, |a, _| *a = None);
                     model.update(cx, |m, cx| m.select_commits(CommitSelection::All, cx));
                 })
                 .child(div().flex_1().font_medium().child("All commits"))
-                .child(div().text_color(theme.muted_foreground).child(m.commits.len().to_string()))
+                .child(div().font_family(theme.mono_font_family.clone()).text_color(theme.muted_foreground).child(m.commits.len().to_string()))
         };
         let commits = m.commits.iter().enumerate().map(|(i, c)| {
             let selected = match selection {
@@ -54,13 +57,15 @@ impl RenderOnce for CommitSelector {
             let (model, anchor) = (self.model.clone(), anchor.clone());
             v_flex()
                 .id(SharedString::from(c.sha.clone()))
+                .relative()
                 .gap_0p5()
                 .px_3()
                 .py_1p5()
-                .rounded_md()
+                .border_b_1()
+                .border_color(theme.border)
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.list_hover))
-                .when(selected, |el| el.bg(theme.list_active))
+                .when(selected, |el| el.child(theme::margin_mark(theme.primary)))
                 .on_click(move |event: &ClickEvent, _, cx| {
                     let last = *anchor.read(cx);
                     let next = match last {
@@ -98,7 +103,7 @@ impl RenderOnce for CommitSelector {
                         .gap_1()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child(crate::theme::avatar(&c.author_login, &c.author_avatar))
+                        .child(theme::avatar(&c.author_login, &c.author_avatar))
                         .child(format!("{} · {}", c.author_login, relative_time(&c.authored_date))),
                 )
         });

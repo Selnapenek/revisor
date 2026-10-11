@@ -23,6 +23,7 @@ use std::{ops::Range, time::Duration};
 
 const PER_PAGE: u32 = 30;
 const STATES: [PrState; 3] = [PrState::Open, PrState::Closed, PrState::All];
+const ROW: &str = "pr-row";
 
 /// `(value, label, color, checked)` of a dropdown option.
 type DropdownOption = (String, String, Option<Hsla>, bool);
@@ -236,7 +237,7 @@ impl PrListScreen {
                                 this.update_filters(|f| toggle(f, &value), window, cx)
                             })),
                     )
-                    .children(color.map(|c| div().size_3().flex_shrink_0().rounded_full().bg(c)))
+                    .children(color.map(|c| div().size_2().flex_shrink_0().bg(c)))
                     .child(div().text_xs().truncate().child(label))
             })
             .collect();
@@ -375,63 +376,62 @@ impl PrListScreen {
             .map(|&ix| {
                 let pr = &self.prs[ix];
                 let route = Route::PrDetail { owner: self.owner.clone(), repo: self.repo.clone(), number: pr.number };
-                let state = if pr.merged_at.is_some() {
-                    Tag::color(ColorName::Purple).child("Merged")
-                } else if pr.state == "closed" {
-                    Tag::color(ColorName::Red).child("Closed")
-                } else if pr.draft {
-                    Tag::secondary().child("Draft")
-                } else {
-                    Tag::color(ColorName::Green).child("Open")
-                };
                 let comments = pr.comments_count + pr.review_comments_count;
-                v_flex()
+                h_flex()
                     .id(("pr", pr.number))
+                    .group(ROW)
+                    .relative()
                     .w_full()
-                    .h(px(56.))
-                    .justify_center()
-                    .gap_1()
+                    .h(rems(3.5))
                     .px_4()
                     .border_b_1()
                     .border_color(theme.border)
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.list_hover))
                     .on_click(move |_, window, cx| app::navigate(route.clone(), window, cx))
+                    .child(theme::margin_mark(theme.primary).invisible().group_hover(ROW, |s| s.visible()))
                     .child(
-                        h_flex()
-                            .w_full()
-                            .gap_2()
-                            .child(state.small().flex_shrink_0())
-                            .child(div().flex_1().min_w_0().text_sm().font_medium().truncate().child(pr.title.clone()))
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
-                                    .child(format!("#{}", pr.number)),
-                            ),
+                        div()
+                            .w(px(64.))
+                            .flex_shrink_0()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child(format!("#{}", pr.number)),
                     )
                     .child(
-                        h_flex()
-                            .gap_2()
-                            .overflow_hidden()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(theme::avatar(&pr.author_login, &pr.author_avatar))
-                            .child(pr.author_login.clone())
-                            .child("·")
-                            .child(relative_time(&pr.updated_at))
-                            .when(comments > 0, |el| {
-                                el.child("·").child(format!("{comments} comment{}", if comments == 1 { "" } else { "s" }))
-                            })
-                            .children(pr.labels.iter().map(|l| {
-                                let c = theme::hex(&l.color);
-                                Tag::custom(c.opacity(0.15), c, c.opacity(0.4))
-                                    .small()
-                                    .rounded_full()
-                                    .flex_shrink_0()
-                                    .child(l.name.clone())
-                            })),
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_2()
+                                    .child(div().flex_1().min_w_0().text_sm().font_medium().truncate().child(pr.title.clone()))
+                                    .child(theme::pr_state_stamp(pr.merged_at.is_some(), &pr.state, pr.draft, cx)),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .overflow_hidden()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(theme::avatar(&pr.author_login, &pr.author_avatar))
+                                    .child(pr.author_login.clone())
+                                    .child("·")
+                                    .child(relative_time(&pr.updated_at))
+                                    .when(comments > 0, |el| {
+                                        el.child("·").child(format!("{comments} comment{}", if comments == 1 { "" } else { "s" }))
+                                    })
+                                    .children(pr.labels.iter().map(|l| {
+                                        let c = theme::hex(&l.color);
+                                        Tag::custom(c.opacity(0.15), c, c.opacity(0.4))
+                                            .small()
+                                            .flex_shrink_0()
+                                            .child(l.name.clone())
+                                    })),
+                            ),
                     )
             })
             .collect()
@@ -448,7 +448,7 @@ impl PrListScreen {
                     .gap_2()
                     .max_w(px(480.))
                     .text_sm()
-                    .child(div().font_medium().child("Couldn't load pull requests"))
+                    .child(div().font_family(theme.mono_font_family.clone()).italic().text_xl().child("Couldn't load pull requests"))
                     .child(div().text_xs().text_center().text_color(theme.muted_foreground).child(error))
                     .child(
                         Button::new("retry")
@@ -464,7 +464,14 @@ impl PrListScreen {
                     .gap_2()
                     .text_sm()
                     .text_color(theme.muted_foreground)
-                    .child(if filtered { "No pull requests match the active filters" } else { "No pull requests found" })
+                    .child(
+                        div()
+                            .font_family(theme.mono_font_family.clone())
+                            .italic()
+                            .text_xl()
+                            .text_color(theme.foreground)
+                            .child(if filtered { "No pull requests match the active filters" } else { "No pull requests found" }),
+                    )
                     .when(filtered, |el| {
                         el.child(
                             Button::new("empty-clear")
@@ -507,7 +514,6 @@ impl Render for PrListScreen {
             .py_3()
             .border_b_1()
             .border_color(theme.border)
-            .bg(theme.secondary)
             .child(
                 Button::new("back")
                     .ghost()
@@ -517,11 +523,25 @@ impl Render for PrListScreen {
                     .on_click(|_, window, cx| app::go_back(window, cx)),
             )
             .child(
+                // One mono line on a shared baseline: muted `owner /`, then the repo, then the count.
                 h_flex()
-                    .text_sm()
-                    .child(div().text_color(theme.muted_foreground).child(self.owner.clone()))
-                    .child(div().mx_0p5().text_color(theme.muted_foreground).child("/"))
-                    .child(div().font_semibold().child(self.repo.clone())),
+                    .items_baseline()
+                    .gap_3()
+                    .pl_3()
+                    .border_l_1()
+                    .border_color(theme.border)
+                    .child(
+                        h_flex()
+                            .items_baseline()
+                            .font_family(theme.mono_font_family.clone())
+                            .text_lg()
+                            .child(div().text_color(theme.muted_foreground).child(format!("{} / ", self.owner)))
+                            .child(div().font_medium().child(self.repo.clone())),
+                    )
+                    .child(theme::eyebrow(
+                        format!("{} pull request{}", self.visible.len(), if self.visible.len() == 1 { "" } else { "s" }),
+                        cx,
+                    )),
             )
             .child(
                 h_flex()

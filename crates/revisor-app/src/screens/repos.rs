@@ -1,7 +1,7 @@
 //! Saved repositories and a browser for the user's GitHub repositories.
 
 use crate::app::{self, Route};
-use crate::backend;
+use crate::{backend, theme};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
@@ -9,7 +9,6 @@ use gpui_kit::component::{
     scroll::ScrollableElement as _,
     spinner::Spinner,
     tab::{Tab, TabBar},
-    tag::Tag,
     *,
 };
 use gpui_kit::{prelude::*, *};
@@ -18,6 +17,7 @@ use std::time::Duration;
 
 const SAVED: usize = 0;
 const BROWSE: usize = 1;
+const ROW: &str = "repo-row";
 
 pub struct ReposScreen {
     tab: usize,
@@ -181,33 +181,24 @@ impl ReposScreen {
     fn render_saved(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let list = if self.saved.is_empty() {
-            div()
+            v_flex()
                 .py_12()
-                .text_center()
+                .gap_1()
+                .items_center()
                 .text_sm()
                 .text_color(theme.muted_foreground)
-                .child("No repositories saved yet. Add one above or browse your repos.")
+                .child(div().font_family(theme.mono_font_family.clone()).italic().text_xl().text_color(theme.foreground).child("No repositories saved yet."))
+                .child("Add one above or browse your repos.")
         } else {
-            v_flex().gap_1().children(self.saved.iter().map(|(owner, repo)| {
+            v_flex().children(self.saved.iter().map(|(owner, repo)| {
                 let id = SharedString::from(format!("{owner}/{repo}"));
                 let route = Route::PrList { owner: owner.clone().into(), repo: repo.clone().into() };
                 let (o, r) = (owner.clone(), repo.clone());
-                h_flex()
+                ledger_row(cx)
                     .id(id.clone())
                     .justify_between()
-                    .px_3()
-                    .py_2p5()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .hover(|s| s.bg(theme.list_hover))
                     .on_click(move |_, window, cx| app::navigate(route.clone(), window, cx))
-                    .child(
-                        h_flex()
-                            .text_sm()
-                            .child(div().text_color(theme.muted_foreground).child(owner.clone()))
-                            .child(div().mx_0p5().text_color(theme.muted_foreground).child("/"))
-                            .child(div().font_medium().child(repo.clone())),
-                    )
+                    .child(repo_name(owner, repo, cx))
                     .child(
                         Button::new(SharedString::from(format!("remove:{id}"))).ghost().xsmall().label("Remove").on_click(cx.listener(
                             move |this, _, window, cx| {
@@ -247,17 +238,12 @@ impl ReposScreen {
             div().flex().justify_center().py_12().child(Spinner::new().large().color(theme.muted_foreground))
         } else {
             v_flex()
-                .child(v_flex().gap_1().children(self.browse.iter().map(|repo| {
+                .child(v_flex().children(self.browse.iter().map(|repo| {
                     let saved = self.saved.iter().any(|(o, r)| *o == repo.owner && *r == repo.name);
                     let (owner, name) = (repo.owner.clone(), repo.name.clone());
-                    h_flex()
+                    ledger_row(cx)
                         .id(SharedString::from(repo.full_name.clone()))
                         .gap_3()
-                        .px_3()
-                        .py_2p5()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme.list_hover))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.save(owner.clone(), name.clone(), true, window, cx)
                         }))
@@ -268,10 +254,10 @@ impl ReposScreen {
                                 .child(
                                     h_flex()
                                         .gap_2()
-                                        .child(div().text_sm().font_medium().truncate().child(repo.full_name.clone()))
-                                        .when(repo.private, |el| el.child(Tag::warning().small().child("Private")))
-                                        .when(repo.fork, |el| el.child(Tag::secondary().small().child("Fork")))
-                                        .when(saved, |el| el.child(Tag::success().small().child("Saved"))),
+                                        .child(repo_name(&repo.owner, &repo.name, cx))
+                                        .when(repo.private, |el| el.child(theme::stamp("Private", theme.warning, theme)))
+                                        .when(repo.fork, |el| el.child(theme::stamp("Fork", theme.muted_foreground, theme)))
+                                        .when(saved, |el| el.child(theme::stamp("Saved", theme.success, theme))),
                                 )
                                 .children(repo.description.clone().filter(|d| !d.is_empty()).map(|d| {
                                     div().mt_0p5().text_xs().text_color(theme.muted_foreground).truncate().child(d)
@@ -314,11 +300,11 @@ impl Render for ReposScreen {
             .py_3()
             .border_b_1()
             .border_color(theme.border)
-            .bg(theme.secondary)
             .child(
                 h_flex()
                     .gap_3()
-                    .child(div().text_sm().font_semibold().child("Repositories"))
+                    .child(div().font_family(theme.mono_font_family.clone()).text_2xl().child("Repositories"))
+                    .child(theme::eyebrow(format!("{} saved", self.saved.len()), cx))
                     .child(
                         TabBar::new("repo-tabs")
                             .segmented()
@@ -345,6 +331,29 @@ impl Render for ReposScreen {
                 .child(div().size_full().overflow_y_scrollbar().p_4().child(div().max_w(px(672.)).mx_auto().child(content))),
         )
     }
+}
+
+/// Ruled ledger line with a primary margin mark on hover.
+fn ledger_row(cx: &App) -> Div {
+    let theme = cx.theme();
+    h_flex()
+        .group(ROW)
+        .relative()
+        .px_3()
+        .py_2p5()
+        .border_b_1()
+        .border_color(theme.border)
+        .cursor_pointer()
+        .hover(|s| s.bg(theme.list_hover))
+        .child(theme::margin_mark(theme.primary).invisible().group_hover(ROW, |s| s.visible()))
+}
+
+fn repo_name(owner: &str, repo: &str, cx: &App) -> Div {
+    h_flex()
+        .min_w_0()
+        .text_sm()
+        .child(div().flex_shrink_0().text_color(cx.theme().muted_foreground).child(format!("{owner} /")))
+        .child(div().ml_1().font_medium().truncate().child(repo.to_string()))
 }
 
 /// Parse `owner/repo` or `https://github.com/owner/repo[/]`.

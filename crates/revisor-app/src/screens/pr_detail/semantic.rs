@@ -2,7 +2,7 @@
 
 use super::conversations::NO_KEY;
 use super::state::{CommitSelection, PrModel, ScrollTarget};
-use crate::backend;
+use crate::{backend, theme};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     input::{Input, InputEvent, InputState},
@@ -138,14 +138,18 @@ impl SemanticPanel {
             let label = if hit.score >= 1.5 && hit.confidence >= 0.6 { "Relevant" } else { "Possible match" };
             v_flex()
                 .id(SharedString::from(format!("hit:{}:{}", hit.filename, hit.hunk_index)))
+                .group("semantic-hit")
+                .relative()
                 .gap_0p5()
                 .px_2()
                 .py_2()
-                .rounded_md()
+                .border_b_1()
+                .border_color(theme.border)
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.list_hover))
                 .on_click(cx.listener(move |this, _, _, cx| this.select(&path, hunk_index, cx)))
-                .child(div().truncate().text_color(theme.link).child(hit.filename.clone()))
+                .child(theme::margin_mark(theme.primary).invisible().group_hover("semantic-hit", |s| s.visible()))
+                .child(div().truncate().font_family(theme.mono_font_family.clone()).text_color(theme.link).child(hit.filename.clone()))
                 .child(div().text_color(muted).child(format!("{label} · {range}")))
                 .child(
                     div()
@@ -168,10 +172,12 @@ impl SemanticPanel {
                 result.skipped.len()
             )))
             .children(result.error.clone().map(|e| div().px_1().text_color(theme.danger).child(e)))
-            .when(result.results.is_empty(), |el| el.child(div().px_1().mt_2().child(empty)))
+            .when(result.results.is_empty(), |el| {
+                el.child(div().px_1().mt_2().font_family(theme.mono_font_family.clone()).italic().text_sm().child(empty))
+            })
             .children(hits)
             .when(!result.skipped.is_empty(), |el| {
-                el.child(div().px_1().mt_2().font_semibold().child("Files not analyzed")).children(
+                el.child(theme::eyebrow("Files not analyzed", cx).px_1().mt_2()).children(
                     result.skipped.iter().map(|s| div().px_1().text_color(muted).child(format!("{}: {}", s.filename, s.reason))),
                 )
             })
@@ -193,7 +199,7 @@ impl Render for SemanticPanel {
                     .p_3()
                     .border_b_1()
                     .border_color(theme.border)
-                    .child(div().font_medium().child("Semantic diff search"))
+                    .child(theme::eyebrow("Semantic diff search", cx))
                     .child(div().text_color(theme.muted_foreground).child("Sends your query and PR diff text to TypeSafe."))
                     .child(
                         h_flex()

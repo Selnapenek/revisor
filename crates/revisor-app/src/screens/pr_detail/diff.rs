@@ -29,7 +29,9 @@ use std::ops::Range;
 
 /// Height hint for rows the list has not measured yet (keeps the scrollbar sane).
 const ROW_HEIGHT: Pixels = px(20.);
-const GUTTER: Pixels = px(50.);
+const GUTTER: Rems = rems(3.125);
+/// Code line height; in rems so it follows the appearance scale.
+const LINE_HEIGHT: Rems = rems(1.25);
 /// Rows kept above a scrolled-to line or thread.
 const SCROLL_CONTEXT: usize = 3;
 const LINE_GROUP: &str = "diff-line";
@@ -550,10 +552,10 @@ impl DiffView {
                 .text_xs()
                 .font_family(theme.mono_font_family.clone())
                 .text_color(theme.muted_foreground)
-                .bg(theme::diff_hunk_bg())
+                .bg(theme::diff_hunk_bg(cx))
                 .border_y_1()
                 .border_color(theme.border)
-                .children(self.hunks(model, fi).get(h).map(|h| h.header.clone()))
+                .children(self.hunks(model, fi).get(h).map(|h| format!("§ {}", h.header)))
                 .into_any_element(),
             Row::Split(..) | Row::Unified(..) => self.line_row(ix, row, model, cx).into_any_element(),
             Row::Thread(..) => div().px_4().py_1().children(thread).into_any_element(),
@@ -564,11 +566,10 @@ impl DiffView {
                     let (first, last) = n.range();
                     v_flex()
                         .gap_2()
-                        .p_3()
-                        .rounded(theme.radius)
-                        .border_1()
-                        .border_color(theme.border)
-                        .bg(theme.secondary)
+                        .pl_3()
+                        .py_1()
+                        .border_l_2()
+                        .border_color(theme.info)
                         .child(div().text_xs().text_color(theme.muted_foreground).child(if n.pick_end {
                             format!("Comment from line {first} · click + on the last line")
                         } else if first == last {
@@ -587,12 +588,7 @@ impl DiffView {
         let file = &model.files[fi];
         let path = SharedString::from(file.filename.clone());
         let collapsed = model.collapsed.contains(&file.filename);
-        let (status, color) = match file.status.as_str() {
-            "added" => ("A", theme.success),
-            "removed" => ("D", theme.danger),
-            "renamed" => ("R", theme.warning),
-            _ => ("M", theme.muted_foreground),
-        };
+        let (status, color) = theme::file_status(&file.status, cx);
         let toggle = path.clone();
         let reviewed = path.clone();
         h_flex()
@@ -615,7 +611,7 @@ impl DiffView {
                             .xsmall()
                             .text_color(theme.muted_foreground),
                     )
-                    .child(div().w_3().flex_shrink_0().text_xs().font_semibold().text_color(color).child(status))
+                    .child(div().w_3().flex_shrink_0().text_xs().font_family(theme.mono_font_family.clone()).font_semibold().text_color(color).child(status))
                     .child(div().flex_1().truncate().text_sm().font_family(theme.mono_font_family.clone()).child(path.clone())),
             )
             .child(
@@ -623,6 +619,7 @@ impl DiffView {
                     .flex_shrink_0()
                     .gap_1p5()
                     .text_xs()
+                    .font_family(theme.mono_font_family.clone())
                     .when(file.additions > 0, |el| el.child(div().text_color(theme.success).child(format!("+{}", file.additions))))
                     .when(file.deletions > 0, |el| el.child(div().text_color(theme.danger).child(format!("−{}", file.deletions)))),
             )
@@ -674,7 +671,7 @@ impl DiffView {
             .justify_center()
             .gap_1()
             .py_0p5()
-            .bg(theme::diff_hunk_bg())
+            .bg(theme::diff_hunk_bg(cx))
             .border_y_1()
             .border_color(theme.border)
             .when(loading, |el| el.child(div().text_xs().text_color(theme.muted_foreground).child("Loading...")))
@@ -692,9 +689,9 @@ impl DiffView {
         // Lines in the new comment's range are tinted.
         let bg = |l: &DiffLine, side: Side, number: Option<u64>| {
             let commented = number.is_some_and(|n| self.new_comment.as_ref().is_some_and(|c| c.covers(fi, side, n)));
-            if commented { Some(theme.primary.opacity(0.2)) } else { line_bg(l.kind) }
+            if commented { Some(theme.info.opacity(0.15)) } else { line_bg(l.kind, cx) }
         };
-        let el = div().flex().w_full().text_xs().line_height(ROW_HEIGHT).font_family(theme.mono_font_family.clone());
+        let el = div().flex().w_full().text_xs().line_height(LINE_HEIGHT).font_family(theme.mono_font_family.clone());
         if let Row::Split(..) = row {
             let half = |line: Option<&DiffLine>, side: Side| {
                 let number = line.and_then(|l| if side == Side::Left { l.old_lineno } else { l.new_lineno });
@@ -703,10 +700,13 @@ impl DiffView {
                     .flex_1()
                     .min_w_0()
                     .group(LINE_GROUP)
+                    .border_l_2()
+                    .border_color(line.map_or(transparent_black(), |l| marker(l.kind, cx)))
                     .when_some(line.and_then(|l| bg(l, side, number)), |el, bg| el.bg(bg))
                     .when_some(number, |el, n| el.on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| this.drag_to(fi, side, n, e, cx))))
                     .child(self.gutter(fi, number, number.map(|n| (side, n)), model, cx))
-                    .children(line.map(|l| self.line_text(fi, l, code_order(ix, side), model)))
+                    .child(rule(cx))
+                    .children(line.map(|l| self.line_text(fi, l, code_order(ix, side), model, cx)))
             };
             return el.child(half(first, Side::Left)).child(half(second, Side::Right));
         }
@@ -718,12 +718,15 @@ impl DiffView {
             DiffLineKind::Context => (" ", theme.muted_foreground),
         };
         el.group(LINE_GROUP)
+            .border_l_2()
+            .border_color(marker(l.kind, cx))
             .when_some(bg(l, side, anchor), |el, bg| el.bg(bg))
             .when_some(anchor, |el, n| el.on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| this.drag_to(fi, side, n, e, cx))))
             .child(self.gutter(fi, l.old_lineno, anchor.map(|n| (side, n)), model, cx))
             .child(self.gutter(fi, l.new_lineno, None, model, cx))
+            .child(rule(cx))
             .child(div().w_3().flex_shrink_0().text_color(color).child(prefix))
-            .child(self.line_text(fi, l, code_order(ix, Side::Left), model))
+            .child(self.line_text(fi, l, code_order(ix, Side::Left), model, cx))
     }
 
     /// Line number cell; with an anchor, pressing it starts a new comment on that line.
@@ -754,12 +757,12 @@ impl DiffView {
                     .left_0p5()
                     .top(px(2.))
                     .size_4()
-                    .rounded_sm()
+                    .rounded(px(2.))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(theme.primary)
-                    .text_color(theme.primary_foreground)
+                    .bg(theme.info)
+                    .text_color(theme.info_foreground)
                     .child("+")
                     .invisible()
                     .group_hover(LINE_GROUP, |s| s.visible()),
@@ -776,7 +779,7 @@ impl DiffView {
     }
 
     /// Line content with syntax colors and word-diff and search highlights.
-    fn line_text(&self, fi: usize, l: &DiffLine, order: u64, model: &PrModel) -> impl IntoElement {
+    fn line_text(&self, fi: usize, l: &DiffLine, order: u64, model: &PrModel, cx: &App) -> impl IntoElement {
         let spans = model.files[fi].diff.as_ref().map_or(&[][..], |d| word_spans(d, l));
         let (ranges, active) = match (self.matches.get(&(fi, l.old_lineno, l.new_lineno)), &model.search) {
             (Some(r), Some(search)) => (
@@ -787,10 +790,10 @@ impl DiffView {
         };
         let backgrounds = segments(l.content.len(), spans, &ranges, active).into_iter().filter_map(|s| {
             let bg = match s.kind {
-                _ if s.active => theme::search_match_active(),
-                _ if s.matched => theme::search_match(),
-                WordDiffKind::Insert => theme::diff_add_word(),
-                WordDiffKind::Delete => theme::diff_del_word(),
+                _ if s.active => theme::search_match_active(cx),
+                _ if s.matched => theme::search_match(cx),
+                WordDiffKind::Insert => theme::diff_add_word(cx),
+                WordDiffKind::Delete => theme::diff_del_word(cx),
                 WordDiffKind::Equal => return None,
             };
             Some((s.range, HighlightStyle { background_color: Some(bg), ..Default::default() }))
@@ -817,10 +820,10 @@ impl DiffView {
             .gap_3()
             .px_4()
             .py_1p5()
+            .items_center()
             .border_b_1()
             .border_color(theme.border)
-            .bg(theme.secondary)
-            .child(div().text_xs().text_color(theme.muted_foreground).child(format!("{} files", model.visible.len())))
+            .child(theme::eyebrow(format!("{} files", model.visible.len()), cx))
             .child(
                 h_flex()
                     .gap_1()
@@ -887,10 +890,9 @@ impl DiffView {
             .py_1p5()
             .border_b_1()
             .border_color(theme.border)
-            .bg(theme.secondary)
             .on_action(cx.listener(|this, _: &Escape, _, cx| this.model.update(cx, |m, cx| m.close_search(cx))))
             .child(div().flex_1().child(Input::new(&self.search).small().prefix(Icon::new(IconName::Search).xsmall())))
-            .child(div().flex_shrink_0().text_xs().text_color(theme.muted_foreground).child(count))
+            .child(div().flex_shrink_0().text_xs().font_family(theme.mono_font_family.clone()).text_color(theme.muted_foreground).child(count))
             .child(step("search-prev", IconName::ChevronUp, "Previous match (Shift+Enter)", false))
             .child(step("search-next", IconName::ChevronDown, "Next match (Enter)", true))
             .child(
@@ -916,7 +918,11 @@ impl Render for DiffView {
                 .gap_2()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child(if filtered { "No files match the sidebar filters" } else { "No files to review" })
+                .child(div().font_family(cx.theme().mono_font_family.clone()).italic().text_xl().child(if filtered {
+                    "No files match the sidebar filters"
+                } else {
+                    "No files to review"
+                }))
                 .when(filtered, |el| {
                     el.child(Button::new("diff-clear-filters").link().small().label("Clear filters").on_click(cx.listener(
                         |this, _, _, cx| {
@@ -954,10 +960,24 @@ fn unified_anchor(l: &DiffLine) -> (Side, Option<u64>) {
     }
 }
 
-fn line_bg(kind: DiffLineKind) -> Option<Hsla> {
+/// 2px left marker: success for additions, danger for deletions, blank so context text aligns.
+fn marker(kind: DiffLineKind, cx: &App) -> Hsla {
     match kind {
-        DiffLineKind::Added => Some(theme::diff_add_bg()),
-        DiffLineKind::Removed => Some(theme::diff_del_bg()),
+        DiffLineKind::Added => cx.theme().success,
+        DiffLineKind::Removed => cx.theme().danger,
+        DiffLineKind::Context => transparent_black(),
+    }
+}
+
+/// Primary-colored margin rule between the line numbers and the code.
+fn rule(cx: &App) -> Div {
+    div().w(px(1.)).flex_shrink_0().bg(cx.theme().primary.opacity(0.45))
+}
+
+fn line_bg(kind: DiffLineKind, cx: &App) -> Option<Hsla> {
+    match kind {
+        DiffLineKind::Added => Some(theme::diff_add_bg(cx)),
+        DiffLineKind::Removed => Some(theme::diff_del_bg(cx)),
         DiffLineKind::Context => None,
     }
 }

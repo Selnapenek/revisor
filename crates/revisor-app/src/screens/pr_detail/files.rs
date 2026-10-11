@@ -1,7 +1,7 @@
 //! Files tab: AI review focus on top, then the filterable file list / tree with review progress.
 
 use super::state::{CommitSelection, PrEvent, PrModel, ScrollTarget};
-use crate::backend;
+use crate::{backend, theme};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
@@ -19,7 +19,9 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 const VIEW_KEY: &str = "file-list-view";
+/// Row height at the default 16px rem; rows scale with the appearance setting.
 const ROW_HEIGHT: f32 = 26.;
+const ROW_GROUP: &str = "file-row";
 
 pub struct FilesPanel {
     model: Entity<PrModel>,
@@ -169,8 +171,10 @@ impl FilesPanel {
                 let path = row.path.clone();
                 let el = h_flex()
                     .id(SharedString::from(row.path.clone()))
+                    .group(ROW_GROUP)
+                    .relative()
                     .w_full()
-                    .h(px(ROW_HEIGHT))
+                    .h(rems(ROW_HEIGHT / 16.))
                     .gap_1p5()
                     .pl(px(12. + row.depth as f32 * 12.))
                     .pr_3()
@@ -199,15 +203,15 @@ impl FilesPanel {
                 };
                 let file = m.visible_file(index);
                 let reviewed = m.reviewed.contains(&file.filename);
-                let (letter, color) = match file.status.as_str() {
-                    "added" => ("A", theme.success),
-                    "removed" => ("D", theme.danger),
-                    "renamed" => ("R", theme.warning),
-                    _ => ("M", theme.info),
-                };
+                let (letter, color) = theme::file_status(&file.status, cx);
                 let dir = (!self.tree).then(|| row.path.rsplit_once('/').map(|(d, _)| format!("{d}/"))).flatten();
                 let (model, viewed_path) = (self.model.clone(), path.clone());
-                el.when(m.selected.as_deref() == Some(&file.filename), |el| el.bg(theme.list_active))
+                let selected = m.selected.as_deref() == Some(&file.filename);
+                el.when(selected, |el| el.bg(theme.list_active))
+                    .child(
+                        theme::margin_mark(theme.primary)
+                            .when(!selected, |el| el.invisible().group_hover(ROW_GROUP, |s| s.visible())),
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| this.model.update(cx, |m, cx| m.select_file(&path, cx))))
                     .child(
                         // Ticking "viewed" must not also select the row.
@@ -223,7 +227,7 @@ impl FilesPanel {
                                     }),
                             ),
                     )
-                    .child(div().w_3().flex_shrink_0().font_semibold().text_color(color).child(letter))
+                    .child(div().w_3().flex_shrink_0().font_family(theme.mono_font_family.clone()).font_semibold().text_color(color).child(letter))
                     .child(
                         h_flex()
                             .flex_1()
@@ -236,13 +240,16 @@ impl FilesPanel {
                                     .font_medium()
                                     .when(reviewed, |el| el.line_through().text_color(theme.muted_foreground))
                                     .child(row.name.clone()),
-                            ),
+                            )
+                            .when(reviewed, |el| {
+                                el.child(Icon::new(IconName::Check).xsmall().ml_1().flex_shrink_0().text_color(theme.info))
+                            }),
                     )
                     .when(file.additions > 0, |el| {
-                        el.child(div().text_color(theme.success).child(format!("+{}", file.additions)))
+                        el.child(div().font_family(theme.mono_font_family.clone()).text_color(theme.success).child(format!("+{}", file.additions)))
                     })
                     .when(file.deletions > 0, |el| {
-                        el.child(div().text_color(theme.danger).child(format!("-{}", file.deletions)))
+                        el.child(div().font_family(theme.mono_font_family.clone()).text_color(theme.danger).child(format!("-{}", file.deletions)))
                     })
             })
             .collect()
@@ -305,17 +312,11 @@ impl Render for FilesPanel {
             .py_2()
             .border_b_1()
             .border_color(theme.border)
-            .child(
-                h_flex()
-                    .justify_between()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child("Files reviewed")
-                    .child(format!("{reviewed}/{total}")),
-            )
+            .child(theme::eyebrow(format!("{reviewed} / {total} proofed"), cx))
             .child(
                 Progress::new("review-progress")
-                    .color(theme.success)
+                    .with_size(px(2.))
+                    .color(theme.primary)
                     .value(if total == 0 { 0. } else { reviewed as f32 * 100. / total as f32 }),
             );
         let list = if self.rows.is_empty() {
@@ -325,7 +326,9 @@ impl Render for FilesPanel {
                 .py_4()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .when(filtered, |el| el.child("No files match current filters"))
+                .when(filtered, |el| {
+                    el.child(div().font_family(theme.mono_font_family.clone()).italic().text_base().child("No files match current filters"))
+                })
                 .when(has_globs, |el| {
                     el.child(
                         Button::new("clear-globs")
@@ -515,7 +518,6 @@ impl FocusPanel {
                 .id(SharedString::from(format!("focus:{}", s.filename)))
                 .px_1()
                 .py_1()
-                .rounded_md()
                 .cursor_pointer()
                 .hover(|st| st.bg(theme.list_hover))
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -591,8 +593,8 @@ impl Render for FocusPanel {
                     .xsmall()
                     .text_color(theme.muted_foreground),
             )
-            .child(div().font_medium().child("Review focus"))
-            .child(div().flex_1().text_color(theme.muted_foreground).child("Experimental"))
+            .child(theme::eyebrow("Review focus", cx).text_color(theme.foreground))
+            .child(theme::eyebrow("· Experimental", cx).flex_1())
             .when(self.expanded, |el| {
                 el.child(Button::new("focus-key").link().xsmall().label("Key").on_click(cx.listener(|this, _, _, cx| {
                     cx.stop_propagation();

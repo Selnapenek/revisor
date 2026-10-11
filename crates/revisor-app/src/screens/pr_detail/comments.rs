@@ -345,13 +345,12 @@ impl Render for ThreadView {
         };
         let theme = cx.theme();
         let (root, resolved) = (self.root_id, thread.is_resolved);
+        // Margin note: an `info` rule (`success` once resolved) beside indented text, no boxed card.
         let frame = v_flex()
             .w_full()
             .overflow_hidden()
-            .rounded(theme.radius)
-            .border_1()
-            .border_color(if resolved { theme.success.opacity(0.3) } else { theme.border })
-            .bg(theme.secondary);
+            .border_l_2()
+            .border_color(if resolved { theme.success.opacity(0.7) } else { theme.info.opacity(0.7) });
 
         if !self.expanded.unwrap_or(!resolved) {
             let hover = theme.list_hover;
@@ -368,7 +367,7 @@ impl Render for ThreadView {
                         this.expanded = Some(true);
                         cx.notify();
                     }))
-                    .child(Icon::new(IconName::CircleCheck).xsmall().text_color(theme.success))
+                    .child(theme::stamp("Resolved", theme.success, theme))
                     .child(
                         div()
                             .flex_1()
@@ -430,9 +429,8 @@ impl Render for ThreadView {
                         .px_3()
                         .py_1()
                         .text_xs()
-                        .bg(theme.success.opacity(0.1))
-                        .child(Icon::new(IconName::CircleCheck).xsmall().text_color(theme.success))
-                        .child(div().flex_1().text_color(theme.success).child("Resolved"))
+                        .child(theme::stamp("Resolved", theme.success, theme))
+                        .child(div().flex_1())
                         .child(Button::new(("thread-collapse", root)).ghost().xsmall().label("Collapse").on_click(
                             cx.listener(|this, _, _, cx| {
                                 this.expanded = Some(false);

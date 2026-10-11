@@ -8,7 +8,6 @@ use gpui_kit::component::{
     input::{Input, InputEvent, InputState},
     scroll::ScrollableElement as _,
     tab::{Tab, TabBar},
-    tag::Tag,
     text::TextView,
     *,
 };
@@ -220,8 +219,17 @@ impl ConversationsPanel {
         let theme = cx.theme();
         let (path, id) = (t.root.path.clone(), t.root.id);
         let hover = theme.list_hover;
+        let active = self.active == Some(id);
+        let rule = if active {
+            theme.primary
+        } else if t.is_resolved {
+            theme.success.opacity(0.6)
+        } else {
+            theme.info.opacity(0.6)
+        };
         v_flex()
             .id(("thread", id))
+            .relative()
             .gap_1()
             .px_3()
             .py_2()
@@ -229,8 +237,9 @@ impl ConversationsPanel {
             .border_color(theme.border)
             .cursor_pointer()
             .hover(move |s| s.bg(hover))
-            .when(self.active == Some(id), |el| el.bg(theme.list_active))
+            .when(active, |el| el.bg(theme.list_active))
             .when(t.is_resolved, |el| el.opacity(0.6))
+            .child(theme::margin_mark(rule))
             .child(
                 h_flex()
                     .gap_1p5()
@@ -242,13 +251,13 @@ impl ConversationsPanel {
                         let n = t.replies.len();
                         el.child(div().flex_shrink_0().text_xs().text_color(theme.link).child(format!("{n} {}", if n == 1 { "reply" } else { "replies" })))
                     })
-                    .when(t.is_resolved, |el| el.child(Tag::success().small().child("Resolved"))),
+                    .when(t.is_resolved, |el| el.child(theme::stamp("Resolved", theme.success, theme))),
             )
             .child(
                 div()
                     .text_xs()
                     .font_family(theme.mono_font_family.clone())
-                    .text_color(theme.muted_foreground)
+                    .text_color(theme.link)
                     .truncate()
                     .child(format!("{}:{}", t.root.path, t.line)),
             )
@@ -265,7 +274,7 @@ impl ConversationsPanel {
         author: &str,
         avatar_url: &str,
         time: Option<&str>,
-        badge: Tag,
+        badge: Div,
         body: &str,
         url: &str,
         cx: &Context<Self>,
@@ -273,11 +282,13 @@ impl ConversationsPanel {
         let theme = cx.theme();
         let url = url.to_string();
         v_flex()
+            .relative()
             .gap_1()
             .px_3()
             .py_2()
             .border_b_1()
             .border_color(theme.border)
+            .child(theme::margin_mark(theme.info.opacity(0.6)))
             .child(
                 h_flex()
                     .gap_1p5()
@@ -285,7 +296,7 @@ impl ConversationsPanel {
                     .child(div().text_xs().font_semibold().truncate().child(author.to_string()))
                     .children(time.map(|t| div().flex_shrink_0().text_xs().text_color(theme.muted_foreground).child(relative_time(t))))
                     .child(div().flex_1())
-                    .child(badge.small()),
+                    .child(badge),
             )
             .child(div().text_xs().child(TextView::markdown((kind, id), body.to_string())))
             .child(
@@ -340,18 +351,18 @@ impl ConversationsPanel {
                     &c.author_login,
                     &c.author_avatar,
                     Some(&c.created_at),
-                    Tag::secondary().child("Conversation"),
+                    theme::stamp("Conversation", theme.muted_foreground, theme),
                     &c.body,
                     &c.html_url,
                     cx,
                 ),
                 Entry::Review(r) => {
                     let badge = match r.state.as_str() {
-                        "APPROVED" => Tag::success().child("Approved"),
-                        "CHANGES_REQUESTED" => Tag::danger().child("Changes requested"),
-                        "COMMENTED" => Tag::secondary().child("Commented"),
-                        "DISMISSED" => Tag::secondary().child("Dismissed"),
-                        other => Tag::secondary().child(other.to_string()),
+                        "APPROVED" => theme::stamp("Approved", theme.success, theme),
+                        "CHANGES_REQUESTED" => theme::stamp("Changes requested", theme.danger, theme),
+                        "COMMENTED" => theme::stamp("Commented", theme.info, theme),
+                        "DISMISSED" => theme::stamp("Dismissed", theme.muted_foreground, theme),
+                        other => theme::stamp(other.to_string(), theme.muted_foreground, theme),
                     };
                     self.body_card("review", r.id, &r.author_login, &r.author_avatar, r.submitted_at.as_deref(), badge, &r.body, &r.html_url, cx)
                 }
@@ -374,23 +385,23 @@ impl ConversationsPanel {
                         .children(["All", "Open", "Resolved"].map(|l| Tab::new().label(l))),
                 ),
             )
-            .child(
-                div()
-                    .px_3()
-                    .py_1()
-                    .border_b_1()
-                    .border_color(theme.border)
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(counts),
-            )
+            .child(theme::eyebrow(counts, cx).px_3().py_1().border_b_1().border_color(theme.border))
             .child(
                 v_flex()
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scrollbar()
                     .when(items.is_empty() && filtered, |el| {
-                        el.child(div().p_4().text_xs().text_center().text_color(theme.muted_foreground).child("No conversations match your filters"))
+                        el.child(
+                            div()
+                                .p_4()
+                                .font_family(theme.mono_font_family.clone())
+                                .italic()
+                                .text_base()
+                                .text_center()
+                                .text_color(theme.muted_foreground)
+                                .child("No conversations match your filters"),
+                        )
                     })
                     .children(items),
             )
@@ -409,7 +420,12 @@ impl ConversationsPanel {
         let danger = theme.danger;
 
         let author_list = if available.is_empty() {
-            div().child("No inline comment authors are available.").into_any_element()
+            div()
+                .font_family(theme.mono_font_family.clone())
+                .italic()
+                .text_sm()
+                .child("No inline comment authors are available.")
+                .into_any_element()
         } else {
             v_flex()
                 .gap_1()
@@ -438,7 +454,12 @@ impl ConversationsPanel {
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.list_hover))
                         .on_click(cx.listener(move |this, _, _, cx| this.reveal_thread(&path, id, cx)))
-                        .child(div().font_semibold().child(format!("{}. {}:{}", i + 1, f.path, f.line)))
+                        .child(
+                            div()
+                                .font_family(theme.mono_font_family.clone())
+                                .text_color(theme.link)
+                                .child(format!("{}. {}:{}", i + 1, f.path, f.line)),
+                        )
                         .child(div().text_color(muted).child(format!("By {}", f.author)))
                         .child(div().text_color(muted).child(format!(
                             "Impact {:.1}/3 · {} · support confidence {}%",
@@ -465,7 +486,7 @@ impl ConversationsPanel {
                         v_flex()
                             .p_2()
                             .gap_1()
-                            .child(div().font_semibold().child(format!("{} failed or unprocessed", result.failed.len())))
+                            .child(theme::eyebrow(format!("{} failed or unprocessed", result.failed.len()), cx))
                             .children(result.failed.iter().map(|f| div().text_color(muted).child(format!("#{}: {}", f.id, f.reason)))),
                     )
                 })
@@ -484,7 +505,7 @@ impl ConversationsPanel {
                         "Select AI reviewer accounts. Ranking sends their comment text and all changed-file contents to TypeSafe. It does not prove a finding is correct.",
                     ))
                     .child(author_list)
-                    .child(div().text_color(muted).child(format!("{} open findings · {excluded} excluded", findings.len())))
+                    .child(theme::eyebrow(format!("{} open findings · {excluded} excluded", findings.len()), cx))
                     .when(!all_commits, |el| el.child("Switch to All commits to rank findings."))
                     .child(
                         Button::new("rank")
