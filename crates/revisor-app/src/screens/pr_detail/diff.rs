@@ -41,6 +41,8 @@ const LINE_GROUP: &str = "diff-line";
 enum Row {
     File(usize),
     Notice(usize, &'static str),
+    /// A large file whose diff loads on request.
+    LoadDiff(usize),
     Expand(usize, ExpandableGap),
     Hunk(usize, usize),
     /// Index into the file's side-by-side rows.
@@ -56,6 +58,7 @@ impl Row {
         match self {
             Row::File(f)
             | Row::Notice(f, _)
+            | Row::LoadDiff(f)
             | Row::Expand(f, _)
             | Row::Hunk(f, _)
             | Row::Split(f, _)
@@ -239,16 +242,16 @@ impl DiffView {
                 continue;
             }
             let diff = match &file.diff {
+                _ if file.is_large() => {
+                    rows.push(Row::LoadDiff(fi));
+                    continue;
+                }
                 None => {
                     rows.push(Row::Notice(fi, "No diff available"));
                     continue;
                 }
                 Some(d) if d.is_binary => {
                     rows.push(Row::Notice(fi, "Binary file — not shown"));
-                    continue;
-                }
-                Some(d) if d.is_too_large => {
-                    rows.push(Row::Notice(fi, "File too large to display"));
                     continue;
                 }
                 Some(d) => d,
@@ -590,6 +593,26 @@ impl DiffView {
                 .text_color(theme.muted_foreground)
                 .child(text)
                 .into_any_element(),
+            Row::LoadDiff(fi) => {
+                let path = model.files[fi].filename.clone();
+                v_flex()
+                    .py_8()
+                    .gap_2()
+                    .items_center()
+                    .text_sm()
+                    .text_color(theme.muted_foreground)
+                    .child("Large diffs are not rendered by default.")
+                    .child(
+                        Button::new(("load-diff", fi))
+                            .small()
+                            .label("Load diff")
+                            .loading(model.diff_loading(&path))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.model.update(cx, |m, cx| m.load_diff(&path, cx));
+                            })),
+                    )
+                    .into_any_element()
+            }
             Row::Expand(fi, gap) => self.expand_row(fi, gap, model, cx).into_any_element(),
             Row::Hunk(fi, h) => div()
                 .px_3()

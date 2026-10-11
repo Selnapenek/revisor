@@ -3,7 +3,7 @@
 use crate::backend;
 use gpui_kit::*;
 use revisor_core::comments::{build_threads, CommentThread, Side};
-use revisor_core::diff::{fetch_pr_files, process_pr_files, search::CodeMatch, ProcessedFile};
+use revisor_core::diff::{diff_contents, fetch_pr_files, process_pr_files, search::CodeMatch, ProcessedFile};
 use revisor_core::provider::types::{
     Commit, IssueComment, PrReview, PullRequest, ReviewComment, ThreadResolutionInfo,
 };
@@ -85,6 +85,8 @@ pub struct PrModel {
     pub search: Option<CodeSearch>,
     file_lines: HashMap<(String, String), Arc<Vec<String>>>,
     file_lines_pending: HashSet<(String, String)>,
+    /// Large files whose diff is being loaded on demand.
+    diff_loading: HashSet<String>,
     _load: Task<()>,
     _files_load: Option<Task<()>>,
 }
@@ -134,6 +136,7 @@ impl PrModel {
             search: None,
             file_lines: HashMap::new(),
             file_lines_pending: HashSet::new(),
+            diff_loading: HashSet::new(),
             _load: Task::ready(()),
             _files_load: None,
         };
@@ -243,24 +246,18 @@ impl PrModel {
             self.all_files = Some(self.files.clone());
         }
         self.selection = selection;
-        let range = match selection {
-            CommitSelection::All => {
-                let files = self.all_files.clone().unwrap_or_default();
-                self._files_load = None;
-                self.files_loading = false;
-                self.set_files(files, cx);
-                return;
-            }
-            CommitSelection::Single(i) => (i, i),
-            CommitSelection::Range(from, to) => (from, to),
-        };
-        let (Some(first), Some(last), Some(pr)) =
-            (self.commits.get(range.0), self.commits.get(range.1), self.pr.as_ref())
-        else {
+        self.diff_loading.clear();
+        if selection == CommitSelection::All {
+            let files = self.all_files.clone().unwrap_or_default();
+            self._files_load = None;
+            self.files_loading = false;
+            self.set_files(files, cx);
+            return;
+        }
+        let (Some(base), Some(head)) = (self.base_sha(), self.head_sha()) else {
             return;
         };
-        let base = first.parents.first().cloned().unwrap_or_else(|| pr.base_sha.clone());
-        let head = last.sha.clone();
+        let (base, head) = (base.to_string(), head.to_string());
         let (o, r) = (self.owner.to_string(), self.repo.to_string());
         let fetch = backend::call(cx, move |s| async move {
             let files = s.provider().await?.get_compare_files(&o, &r, &base, &head).await;
@@ -529,6 +526,75 @@ impl PrModel {
             CommitSelection::All => self.pr.as_ref().map(|pr| pr.head_sha.as_str()),
             CommitSelection::Single(i) | CommitSelection::Range(_, i) => self.commits.get(i).map(|c| c.sha.as_str()),
         }
+    }
+
+    /// Base commit of the current commit selection.
+    // ponytail: for All this is the base branch tip, not the merge base, so base-branch changes show too;
+    // read `merge_base_commit` from the compare API if that confuses.
+    pub fn base_sha(&self) -> Option<&str> {
+        let pr = self.pr.as_ref()?;
+        let first = match self.selection {
+            CommitSelection::All => return Some(&pr.base_sha),
+            CommitSelection::Single(i) | CommitSelection::Range(i, _) => self.commits.get(i)?,
+        };
+        Some(first.parents.first().unwrap_or(&pr.base_sha))
+    }
+
+    /// Fetch both versions of a large file and diff them locally, since GitHub sends no patch for it.
+    // ponytail: renamed files fetch the old version at the new path and fail; add `previous_filename` if needed.
+    pub fn load_diff(&mut self, path: &str, cx: &mut Context<Self>) {
+        let (Some(base), Some(head)) = (self.base_sha(), self.head_sha()) else { return };
+        let Some(file) = self.files.iter().find(|f| f.filename == path) else { return };
+        let (base, head, status) = (base.to_string(), head.to_string(), file.status.clone());
+        if !self.diff_loading.insert(path.to_string()) {
+            return;
+        }
+        let (o, r, p) = (self.owner.to_string(), self.repo.to_string(), path.to_string());
+        let fetch = backend::call(cx, {
+            let head = head.clone();
+            move |s| async move {
+                let provider = s.provider().await?;
+                let old = match status.as_str() {
+                    "added" => String::new(),
+                    _ => provider.get_file_content(&o, &r, &p, &base).await.map_err(backend::err)?,
+                };
+                let new = match status.as_str() {
+                    "removed" => String::new(),
+                    _ => provider.get_file_content(&o, &r, &p, &head).await.map_err(backend::err)?,
+                };
+                Ok(diff_contents(&old, &new))
+            }
+        });
+        let path = path.to_string();
+        cx.spawn(async move |this, cx| {
+            let result = fetch.await;
+            this.update(cx, |this, cx| {
+                if !this.diff_loading.remove(&path) || this.head_sha() != Some(head.as_str()) {
+                    // The commit selection changed meanwhile.
+                    return;
+                }
+                match result {
+                    Ok(diff) => {
+                        let all = (this.selection == CommitSelection::All).then_some(&mut this.all_files);
+                        for files in [Some(&mut this.files), all.and_then(Option::as_mut)].into_iter().flatten() {
+                            if let Some(f) = files.iter_mut().find(|f| f.filename == path) {
+                                f.diff = Some(diff.clone());
+                            }
+                        }
+                        this.research();
+                    }
+                    Err(e) => notify_error(format!("Failed to load diff: {e}"), cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub fn diff_loading(&self, path: &str) -> bool {
+        self.diff_loading.contains(path)
     }
 
     /// Cached lines of `path` at `git_ref`, without fetching.

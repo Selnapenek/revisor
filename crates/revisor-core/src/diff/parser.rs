@@ -30,11 +30,7 @@ pub enum DiffLineKind {
 pub struct ParsedDiff {
     pub hunks: Vec<DiffHunk>,
     pub is_binary: bool,
-    pub is_too_large: bool,
 }
-
-/// Maximum number of diff lines before marking as "too large"
-const MAX_DIFF_LINES: usize = 20_000;
 
 /// Parse a unified diff patch string into structured hunks
 pub fn parse_patch(patch: &str) -> ParsedDiff {
@@ -42,7 +38,6 @@ pub fn parse_patch(patch: &str) -> ParsedDiff {
         return ParsedDiff {
             hunks: vec![],
             is_binary: false,
-            is_too_large: false,
         };
     }
 
@@ -51,20 +46,10 @@ pub fn parse_patch(patch: &str) -> ParsedDiff {
         return ParsedDiff {
             hunks: vec![],
             is_binary: true,
-            is_too_large: false,
         };
     }
 
     let lines: Vec<&str> = patch.lines().collect();
-
-    // Check total size
-    if lines.len() > MAX_DIFF_LINES {
-        return ParsedDiff {
-            hunks: vec![],
-            is_binary: false,
-            is_too_large: true,
-        };
-    }
 
     let mut hunks = Vec::new();
     let mut current_hunk: Option<DiffHunk> = None;
@@ -144,7 +129,6 @@ pub fn parse_patch(patch: &str) -> ParsedDiff {
     ParsedDiff {
         hunks,
         is_binary: false,
-        is_too_large: false,
     }
 }
 
