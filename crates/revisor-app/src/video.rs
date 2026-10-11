@@ -100,6 +100,11 @@ pub struct VideoPlayer {
     error: Option<String>,
     /// Asking GitHub for a signed link to the video.
     resolving: bool,
+    /// The player covers the window, which is made full screen.
+    fullscreen: bool,
+    /// The window was full screen before, so leaving the player must not change it.
+    window_was_fullscreen: bool,
+    focus: FocusHandle,
     /// Frames left to pull while paused, so a seek shows its frame.
     refresh: u8,
     _subscription: Subscription,
@@ -118,6 +123,9 @@ impl VideoPlayer {
             playback: None,
             error: None,
             resolving: false,
+            fullscreen: false,
+            window_was_fullscreen: false,
+            focus: cx.focus_handle(),
             refresh: 0,
             _subscription: subscription,
         }
@@ -171,6 +179,21 @@ impl VideoPlayer {
         cx.open_url(&self.url);
     }
 
+    fn set_fullscreen(&mut self, on: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if on == self.fullscreen {
+            return;
+        }
+        if on {
+            self.window_was_fullscreen = window.is_fullscreen();
+            self.focus.focus(window, cx);
+        }
+        if !self.window_was_fullscreen && window.is_fullscreen() != on {
+            window.toggle_fullscreen();
+        }
+        self.fullscreen = on;
+        cx.notify();
+    }
+
     fn seek_to(&mut self, fraction: f64, cx: &mut Context<Self>) {
         #[cfg(target_os = "macos")]
         if let Some(playback) = &self.playback {
@@ -210,78 +233,89 @@ impl Render for VideoPlayer {
         let (playing, position, duration, ratio) = (false, 0., 0., 16. / 9.);
 
         let theme = cx.theme();
-        let url = self.url.clone();
-        v_flex()
-            .my_2()
-            .w_full()
-            .max_w(px(640.))
-            .rounded_md()
-            .overflow_hidden()
-            .border_1()
-            .border_color(theme.border)
-            .child(
-                div()
-                    .id("video-frame")
-                    .relative()
-                    .w_full()
-                    .aspect_ratio(ratio)
-                    .bg(black())
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx)))
-                    .map(|el| {
-                        #[cfg(target_os = "macos")]
-                        let el = el.children(frame.map(|frame| surface(frame).size_full()));
-                        el
-                    })
-                    .when(!playing, |el| {
-                        el.child(
-                            div().absolute().inset_0().flex().items_center().justify_center().child(
-                                div()
-                                    .size_12()
-                                    .rounded_full()
-                                    .bg(black().opacity(0.6))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(Icon::new(IconName::Play).size_6().text_color(white())),
-                            ),
-                        )
-                    }),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .px_2()
-                    .py_1()
-                    .bg(theme.secondary)
-                    .child(
-                        Button::new("video-toggle")
-                            .ghost()
-                            .xsmall()
-                            .icon(if playing { IconName::Pause } else { IconName::Play })
-                            .loading(self.resolving)
-                            .tooltip(if playing { "Pause" } else { "Play" })
-                            .on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx))),
-                    )
-                    .child(div().flex_1().child(Slider::new(&self.seek)))
-                    .child(
+        let fullscreen = self.fullscreen;
+        let video = div()
+            .id("video-frame")
+            .relative()
+            .bg(black())
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx)))
+            .map(|el| {
+                #[cfg(target_os = "macos")]
+                let el = el.children(frame.map(|frame| surface(frame).size_full()));
+                el
+            })
+            .when(!playing, |el| {
+                el.child(
+                    div().absolute().inset_0().flex().items_center().justify_center().child(
                         div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(format!("{} / {}", clock(position), clock(duration))),
-                    )
-                    .child(
-                        Button::new("video-open")
-                            .ghost()
-                            .xsmall()
-                            .icon(IconName::ExternalLink)
-                            .tooltip("Open in browser")
-                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                            .size_12()
+                            .rounded_full()
+                            .bg(black().opacity(0.6))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(Icon::new(IconName::Play).size_6().text_color(white())),
                     ),
+                )
+            });
+        let controls = h_flex()
+            .gap_2()
+            .px_2()
+            .py_1()
+            .bg(theme.secondary)
+            .child(
+                Button::new("video-toggle")
+                    .ghost()
+                    .xsmall()
+                    .icon(if playing { IconName::Pause } else { IconName::Play })
+                    .loading(self.resolving)
+                    .tooltip(if playing { "Pause" } else { "Play" })
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx))),
             )
-            .children(self.error.clone().map(|e| {
-                div().px_2().pb_1().text_xs().text_color(theme.danger).child(format!("Cannot play video: {e}"))
-            }))
+            .child(div().flex_1().child(Slider::new(&self.seek)))
+            .child(div().text_xs().text_color(theme.muted_foreground).child(format!("{} / {}", clock(position), clock(duration))))
+            .child(
+                Button::new("video-fullscreen")
+                    .ghost()
+                    .xsmall()
+                    .icon(if fullscreen { IconName::Minimize } else { IconName::Maximize })
+                    .tooltip(if fullscreen { "Exit full screen (Esc)" } else { "Full screen" })
+                    .on_click(cx.listener(|this, _, window, cx| this.set_fullscreen(!this.fullscreen, window, cx))),
+            );
+        let error = self.error.clone().map(|e| {
+            div().px_2().pb_1().text_xs().text_color(theme.danger).child(format!("Cannot play video: {e}"))
+        });
+
+        let card = v_flex().my_2().w_full().max_w(px(640.)).rounded_md().overflow_hidden().border_1().border_color(theme.border);
+        if !fullscreen {
+            return card.child(video.w_full().aspect_ratio(ratio)).child(controls).children(error).into_any_element();
+        }
+        // Keep the inline slot so the page does not jump; the player covers the whole window above everything.
+        let viewport = window.viewport_size();
+        card.child(div().w_full().aspect_ratio(ratio).bg(black()))
+            .child(deferred(
+                anchored().position(point(px(0.), px(0.))).child(
+                    v_flex()
+                        .id("video-fullscreen-overlay")
+                        .track_focus(&self.focus)
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                            if event.keystroke.key == "escape" {
+                                this.set_fullscreen(false, window, cx);
+                                cx.stop_propagation();
+                            }
+                        }))
+                        .occlude()
+                        .w(viewport.width)
+                        .h(viewport.height)
+                        .bg(black())
+                        .child(video.flex_1().w_full())
+                        .child(controls)
+                        .children(error),
+                ),
+            )
+            .with_priority(100))
+            .into_any_element()
     }
 }
 
