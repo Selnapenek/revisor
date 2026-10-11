@@ -512,8 +512,6 @@ impl Render for PrListScreen {
             .gap_3()
             .px_4()
             .py_3()
-            .border_b_1()
-            .border_color(theme.border)
             .child(
                 Button::new("back")
                     .ghost()
@@ -559,6 +557,10 @@ impl Render for PrListScreen {
                             .child(Tab::new().label("All")),
                     ),
             );
-        v_flex().size_full().child(header).child(self.render_filters(cx)).child(self.render_list(cx))
+        v_flex().size_full().child(header).child(
+            div().flex_1().overflow_hidden().mt_2().child(
+                theme::island(cx).flex().flex_col().child(self.render_filters(cx)).child(self.render_list(cx)),
+            ),
+        )
     }
 }

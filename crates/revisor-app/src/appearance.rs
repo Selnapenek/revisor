@@ -6,7 +6,7 @@ use gpui_kit::*;
 use revisor_core::cache::queries;
 
 pub const SYSTEM_FONT: &str = ".SystemUIFont";
-const DEFAULT_THEME: &str = "Revisor Cyanotype";
+const DEFAULT_THEME: &str = "Revisor Islands";
 
 #[derive(Clone, Copy)]
 pub enum Field {

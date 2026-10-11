@@ -298,8 +298,6 @@ impl Render for ReposScreen {
             .justify_between()
             .px_4()
             .py_3()
-            .border_b_1()
-            .border_color(theme.border)
             .child(
                 h_flex()
                     .gap_3()
@@ -328,7 +326,10 @@ impl Render for ReposScreen {
             div()
                 .flex_1()
                 .overflow_hidden()
-                .child(div().size_full().overflow_y_scrollbar().p_4().child(div().max_w(px(672.)).mx_auto().child(content))),
+                .mt_2()
+                .child(theme::island(cx).child(
+                    div().size_full().overflow_y_scrollbar().p_4().child(div().max_w(px(672.)).mx_auto().child(content)),
+                )),
         )
     }
 }

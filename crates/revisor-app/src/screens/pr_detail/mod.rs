@@ -24,6 +24,7 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::*, *};
 use revisor_core::{cache::queries, time::relative_time};
 use state::PrModel;
+use std::rc::Rc;
 
 actions!(pr_detail, [ToggleSearch, FocusFileFilter, ToggleConversations, PrevFile, NextFile, CloseSearch]);
 
@@ -114,8 +115,6 @@ impl PrDetailScreen {
             .gap_3()
             .px_4()
             .py_2()
-            .border_b_1()
-            .border_color(cx.theme().border)
             .child(
                 Button::new("back")
                     .ghost()
@@ -299,7 +298,8 @@ impl Render for PrDetailScreen {
             .child(self.header(cx))
             .child(match (loading, error, self.sidebar_width) {
                 (false, Some(error), _) => self.load_error(error, cx).into_any_element(),
-                (false, None, Some(width)) => h_resizable("pr-detail-split")
+                (false, None, Some(width)) => div().flex_1().overflow_hidden().mt_1().child(h_resizable("pr-detail-split")
+                    .with_handle_appearance(Rc::new(|_, _, _| Some(div().into_any_element())))
                     .on_resize(cx.listener(|this, state: &Entity<ResizableState>, _, cx| {
                         // Hidden left panel has no real width; keep the saved one.
                         if let Some(&width) = state.read(cx).sizes().first().filter(|_| this.sidebar_open) {
@@ -314,19 +314,22 @@ impl Render for PrDetailScreen {
                             .size(width)
                             .size_range(px(180.)..px(600.))
                             .flex_none()
-                            .child(self.sidebar(cx)),
+                            .child(div().size_full().p_1().child(theme::island(cx).child(self.sidebar(cx)))),
                     )
-                    // Opaque so code stays readable over the blurred window.
-                    .child(resizable_panel().child(div().size_full().bg(cx.theme().colors.list).child(self.diff.clone())))
+                    .child(resizable_panel().child(
+                        div().size_full().p_1().child(theme::island(cx).child(self.diff.clone())),
+                    ))
                     .child(
                         resizable_panel()
                             .visible(show_description)
                             .size(px(DESCRIPTION_WIDTH))
                             .size_range(px(240.)..px(700.))
                             .flex_none()
-                            .children(description),
+                            .children(description.map(|body| {
+                                div().size_full().p_1().child(theme::island(cx).child(body))
+                            })),
                     )
-                    .into_any_element(),
+                    ).into_any_element(),
                 _ => div().flex_1().flex().items_center().justify_center().child(Spinner::new()).into_any_element(),
             })
     }

@@ -2,6 +2,183 @@
   "name": "Revisor",
   "themes": [
     {
+      "name": "Revisor Islands",
+      "mode": "dark",
+      "radius": 6,
+      "radius.lg": 12,
+      "colors": {
+        "background": "#121216f2",
+        "foreground": "#bcbec4",
+        "border": "#ffffff0f",
+        "caret": "#548af7",
+        "ring": "#548af7",
+        "selection.background": "#548af73d",
+        "overlay": "#00000099",
+        "window.border": "#ffffff0f",
+        "accent.background": "#25262a",
+        "accent.foreground": "#bcbec4",
+        "muted.background": "#202226",
+        "muted.foreground": "#7a7e85",
+        "primary.background": "#548af7",
+        "primary.hover.background": "#6d9df8",
+        "primary.active.background": "#4078e8",
+        "primary.foreground": "#ffffff",
+        "secondary.background": "#202226",
+        "secondary.hover.background": "#292b30",
+        "secondary.active.background": "#1b1d21",
+        "secondary.foreground": "#bcbec4",
+        "success.background": "#5fb865",
+        "success.foreground": "#121216",
+        "danger.background": "#f75464",
+        "danger.foreground": "#121216",
+        "warning.background": "#e5c07b",
+        "warning.foreground": "#121216",
+        "info.background": "#548af7",
+        "info.foreground": "#ffffff",
+        "link.foreground": "#548af7",
+        "link.hover.foreground": "#6d9df8",
+        "link.active.foreground": "#4078e8",
+        "input.border": "#ffffff1f",
+        "popover.background": "#202226",
+        "popover.foreground": "#bcbec4",
+        "accordion.background": "#202226",
+        "group_box.background": "#202226",
+        "group_box.foreground": "#bcbec4",
+        "skeleton.background": "#292b30",
+        "switch.background": "#34373d",
+        "progress_bar.background": "#548af7",
+        "slider.bar.background": "#548af7",
+        "slider.thumb.background": "#bcbec4",
+        "drag_border": "#548af7",
+        "drop_target.background": "#548af726",
+        "list.background": "#181a1d",
+        "list.hover.background": "#ffffff0a",
+        "list.active.background": "#25262a90",
+        "list.active.border": "#548af7",
+        "list.even.background": "#ffffff05",
+        "list.head.background": "#202226",
+        "table.background": "#181a1d",
+        "table.head.foreground": "#7a7e85",
+        "table.row.border": "#ffffff0f",
+        "tab.background": "#161619",
+        "tab.foreground": "#7a7e85",
+        "tab.active.background": "#25262a",
+        "tab.active.foreground": "#bcbec4",
+        "tab_bar.background": "#00000000",
+        "tab_bar.segmented.background": "#ffffff0a",
+        "scrollbar.background": "#00000000",
+        "scrollbar.thumb.background": "#ffffff2e",
+        "scrollbar.thumb.hover.background": "#ffffff4d",
+        "sidebar.background": "#00000000",
+        "sidebar.foreground": "#bcbec4",
+        "sidebar.border": "#ffffff0f",
+        "sidebar.accent.background": "#25262a",
+        "sidebar.accent.foreground": "#bcbec4",
+        "sidebar.primary.background": "#548af7",
+        "sidebar.primary.foreground": "#ffffff",
+        "title_bar.background": "#00000000",
+        "title_bar.border": "#00000000",
+        "status_bar.background": "#00000000",
+        "status_bar.border": "#00000000",
+        "base.red": "#f75464",
+        "base.red.light": "#ff8490",
+        "base.green": "#5fb865",
+        "base.green.light": "#83cc87",
+        "base.blue": "#548af7",
+        "base.blue.light": "#6d9df8",
+        "base.yellow": "#e5c07b",
+        "base.yellow.light": "#efd398",
+        "base.magenta": "#c77dbb",
+        "base.magenta.light": "#daa2d0",
+        "base.cyan": "#2aacb8",
+        "base.cyan.light": "#69c9d0"
+      },
+      "highlight": {
+        "syntax": {
+          "attribute": {
+            "color": "#b3ae60"
+          },
+          "boolean": {
+            "color": "#c77dbb"
+          },
+          "comment": {
+            "color": "#7a7e85",
+            "font_style": "italic"
+          },
+          "comment.doc": {
+            "color": "#7a7e85",
+            "font_style": "italic"
+          },
+          "constant": {
+            "color": "#c77dbb"
+          },
+          "constructor": {
+            "color": "#bcbec4"
+          },
+          "enum": {
+            "color": "#bcbec4"
+          },
+          "function": {
+            "color": "#56a8f5"
+          },
+          "keyword": {
+            "color": "#cf8e6d"
+          },
+          "label": {
+            "color": "#bcbec4"
+          },
+          "number": {
+            "color": "#2aacb8"
+          },
+          "operator": {
+            "color": "#bcbec4"
+          },
+          "preproc": {
+            "color": "#cf8e6d"
+          },
+          "property": {
+            "color": "#c77dbb"
+          },
+          "string": {
+            "color": "#6aab73"
+          },
+          "string.escape": {
+            "color": "#cf8e6d"
+          },
+          "string.regex": {
+            "color": "#cf8e6d"
+          },
+          "string.special": {
+            "color": "#6aab73"
+          },
+          "string.special.symbol": {
+            "color": "#c77dbb"
+          },
+          "tag": {
+            "color": "#cf8e6d"
+          },
+          "text.literal": {
+            "color": "#6aab73"
+          },
+          "title": {
+            "color": "#56a8f5",
+            "font_weight": 600
+          },
+          "type": {
+            "color": "#bcbec4"
+          },
+          "variable.special": {
+            "color": "#c77dbb"
+          },
+          "variant": {
+            "color": "#c77dbb"
+          }
+        }
+      },
+      "mono_font.family": "JetBrains Mono",
+      "mono_font.size": 13
+    },
+    {
       "name": "Revisor Cyanotype",
       "mode": "dark",
       "radius": 2,

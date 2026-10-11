@@ -5,6 +5,13 @@
 use gpui_kit::component::{avatar::Avatar, ActiveTheme as _, Sizable as _, Theme};
 use gpui_kit::*;
 
+/// A floating panel on the window canvas.
+pub fn island(cx: &App) -> Div {
+    let theme = cx.theme();
+    div().size_full().overflow_hidden().rounded(px(12.)).bg(theme.colors.list)
+        .border_1().border_color(theme.foreground.opacity(0.06)).shadow_md()
+}
+
 pub fn diff_add_bg(cx: &App) -> Hsla { cx.theme().success.opacity(0.12) }
 pub fn diff_add_word(cx: &App) -> Hsla { cx.theme().success.opacity(0.32) }
 pub fn diff_del_bg(cx: &App) -> Hsla { cx.theme().danger.opacity(0.12) }

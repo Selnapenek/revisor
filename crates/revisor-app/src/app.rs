@@ -182,8 +182,6 @@ impl AppRoot {
             .text_size(rems(0.625))
             .text_color(theme.muted_foreground)
             .bg(theme.status_bar)
-            .border_t_1()
-            .border_color(theme.status_bar_border)
             .child("REVISOR")
             .children(self.rate.as_ref().map(|r| {
                 div().text_color(rate_color).child(format!("— API {}/{}", thousands(r.remaining), thousands(r.limit)))
@@ -232,6 +230,8 @@ impl Render for AppRoot {
                 Some(screen) => div()
                     .flex_1()
                     .overflow_hidden()
+                    .px_2()
+                    .pb_2()
                     .child(screen.clone())
                     .with_animation(
                         ("screen", self.nav),

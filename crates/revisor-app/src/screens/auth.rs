@@ -281,9 +281,12 @@ impl Render for AuthScreen {
         };
 
         div().size_full().flex().items_center().justify_center().child(
-            v_flex()
+            theme::island(cx)
                 .w(px(384.))
-                .px_6()
+                .h_auto()
+                .p_6()
+                .child(v_flex()
+                .w_full()
                 .gap_8()
                 .child(
                     v_flex()
@@ -304,7 +307,7 @@ impl Render for AuthScreen {
                                 .child("Every change, proofed."),
                         ),
                 )
-                .child(body),
+                .child(body)),
         )
     }
 }
