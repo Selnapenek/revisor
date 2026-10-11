@@ -53,6 +53,8 @@ pub struct PrModel {
     pub owner: SharedString,
     pub repo: SharedString,
     pub number: u64,
+    /// Signed-in login. Passed in: reading `AppRoot` here panics while it opens this screen.
+    pub viewer: Option<String>,
     pub pr: Option<PullRequest>,
     /// Files of the current commit selection.
     pub files: Vec<ProcessedFile>,
@@ -62,6 +64,8 @@ pub struct PrModel {
     pub comments: Vec<ReviewComment>,
     pub issue_comments: Vec<IssueComment>,
     pub reviews: Vec<PrReview>,
+    /// The viewer's PENDING review on GitHub; its comments are in `comments`.
+    pub pending_review: Option<PrReview>,
     resolutions: Vec<ThreadResolutionInfo>,
     /// Inline threads of all files, rebuilt whenever comments change.
     pub threads: Vec<CommentThread>,
@@ -88,11 +92,18 @@ pub struct PrModel {
 impl EventEmitter<PrEvent> for PrModel {}
 
 impl PrModel {
-    pub fn new(owner: SharedString, repo: SharedString, number: u64, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        owner: SharedString,
+        repo: SharedString,
+        number: u64,
+        viewer: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut this = Self {
             owner,
             repo,
             number,
+            viewer,
             pr: None,
             files: vec![],
             visible: vec![],
@@ -100,6 +111,7 @@ impl PrModel {
             comments: vec![],
             issue_comments: vec![],
             reviews: vec![],
+            pending_review: None,
             resolutions: vec![],
             threads: vec![],
             reviewed: HashSet::new(),
@@ -129,9 +141,10 @@ impl PrModel {
         self.loading = true;
         self.error = None;
         let (o, r, number) = (self.owner.to_string(), self.repo.to_string(), self.number);
+        let viewer = self.viewer.clone();
         let load = backend::call(cx, move |s| async move {
             let p = s.provider().await?;
-            let (pr, files, comments, issue_comments, reviews, resolutions, commits) = tokio::try_join!(
+            let (pr, files, mut comments, issue_comments, mut reviews, resolutions, commits) = tokio::try_join!(
                 async { p.get_pull_request(&o, &r, number).await.map_err(backend::err) },
                 fetch_pr_files(&*p, &o, &r, number),
                 async { p.get_pr_comments(&o, &r, number).await.map_err(backend::err) },
@@ -140,21 +153,28 @@ impl PrModel {
                 async { p.get_thread_resolutions(&o, &r, number).await.map_err(backend::err) },
                 async { p.get_pr_commits(&o, &r, number).await.map_err(backend::err) },
             )?;
+            let pending = take_pending_review(&mut reviews, viewer.as_deref());
+            if let Some(review) = &pending {
+                let extra = p.get_review_comments(&o, &r, number, review.id).await.map_err(backend::err)?;
+                let known: HashSet<u64> = comments.iter().map(|c| c.id).collect();
+                comments.extend(extra.into_iter().filter(|c| !known.contains(&c.id)));
+            }
             drop(p);
             let reviewed = queries::get_reviewed_files(s.cache.lock().await.conn(), &o, &r, number)
                 .map_err(backend::err)?;
-            Ok((pr, files, comments, issue_comments, reviews, resolutions, commits, reviewed))
+            Ok((pr, files, comments, issue_comments, reviews, pending, resolutions, commits, reviewed))
         });
         self._load = cx.spawn(async move |this, cx| {
             let result = load.await;
             this.update(cx, |this, cx| {
                 this.loading = false;
                 match result {
-                    Ok((pr, files, comments, issue_comments, reviews, resolutions, commits, reviewed)) => {
+                    Ok((pr, files, comments, issue_comments, reviews, pending, resolutions, commits, reviewed)) => {
                         this.pr = Some(pr);
                         this.comments = comments;
                         this.issue_comments = issue_comments;
                         this.reviews = reviews;
+                        this.pending_review = pending;
                         this.resolutions = resolutions;
                         this.commits = commits;
                         this.reviewed = reviewed.into_iter().collect();
@@ -376,6 +396,20 @@ impl PrModel {
         cx.notify();
     }
 
+    pub fn set_pending_review(&mut self, review: Option<PrReview>, cx: &mut Context<Self>) {
+        self.pending_review = review;
+        cx.notify();
+    }
+
+    pub fn is_pending(&self, comment: &ReviewComment) -> bool {
+        self.pending_review.as_ref().is_some_and(|p| comment.review_id == Some(p.id))
+    }
+
+    /// Comments in the viewer's pending review.
+    pub fn pending_count(&self) -> usize {
+        self.comments.iter().filter(|c| self.is_pending(c)).count()
+    }
+
     pub fn remove_comment(&mut self, id: u64, cx: &mut Context<Self>) {
         self.comments.retain(|c| c.id != id);
         self.rebuild_threads();
@@ -500,6 +534,12 @@ impl PrModel {
     pub fn file_lines_loading(&self, path: &str, git_ref: &str) -> bool {
         self.file_lines_pending.contains(&(path.to_string(), git_ref.to_string()))
     }
+}
+
+/// Remove and return `viewer`'s PENDING review. GitHub shows a pending review only to its author.
+fn take_pending_review(reviews: &mut Vec<PrReview>, viewer: Option<&str>) -> Option<PrReview> {
+    let i = reviews.iter().position(|r| r.state == "PENDING" && Some(r.author_login.as_str()) == viewer)?;
+    Some(reviews.remove(i))
 }
 
 /// Show an error in the active window. Models have no window of their own.

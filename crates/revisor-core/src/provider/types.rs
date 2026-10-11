@@ -158,12 +158,33 @@ pub struct IssueComment {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrReview {
     pub id: u64,
+    /// GraphQL node ID (needed to add comments to a pending review)
+    #[serde(default)]
+    pub node_id: String,
     pub body: String,
     pub state: String,
     pub author_login: String,
     pub author_avatar: String,
     pub submitted_at: Option<String>,
     pub html_url: String,
+}
+
+/// How a review is submitted
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReviewEvent {
+    Comment,
+    Approve,
+    RequestChanges,
+}
+
+impl ReviewEvent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Comment => "COMMENT",
+            Self::Approve => "APPROVE",
+            Self::RequestChanges => "REQUEST_CHANGES",
+        }
+    }
 }
 
 /// Parameters for creating a new comment

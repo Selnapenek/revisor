@@ -156,9 +156,10 @@ impl AppRoot {
             Route::PrList { owner, repo } => {
                 cx.new(|cx| PrListScreen::new(owner.clone(), repo.clone(), window, cx)).into()
             }
-            Route::PrDetail { owner, repo, number } => cx
-                .new(|cx| PrDetailScreen::new(owner.clone(), repo.clone(), *number, window, cx))
-                .into(),
+            Route::PrDetail { owner, repo, number } => {
+                let viewer = self.user.as_ref().map(|u| u.login.clone());
+                cx.new(|cx| PrDetailScreen::new(owner.clone(), repo.clone(), *number, viewer, window, cx)).into()
+            }
             Route::Settings { .. } => cx.new(|cx| SettingsScreen::new(window, cx)).into(),
         });
         self.route = route;

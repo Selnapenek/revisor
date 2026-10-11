@@ -1,7 +1,7 @@
 //! The diff: toolbar, code search bar and one virtualized list over every visible file.
 
 use super::code_text::CodeText;
-use super::comments::{save_comment, CommentForm, CommentFormEvent, ThreadView};
+use super::comments::{save_comment, save_with, CommentForm, CommentFormEvent, ThreadView};
 use super::state::{CommitSelection, DiffMode, PrEvent, PrModel, ScrollTarget};
 use super::syntax::FileSyntax;
 use crate::{backend, theme};
@@ -477,19 +477,28 @@ impl DiffView {
         }
     }
 
+    /// Primary button adds to the viewer's pending review (starting one if needed); the second posts at once.
     fn open_new_comment(&mut self, fi: usize, side: Side, line: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let reviewing = self.model.read(cx).pending_review.is_some();
+        let (primary, single) =
+            if reviewing { ("Add review comment", "Add single comment") } else { ("Start a review", "Comment") };
         let (form, subscription) =
-            CommentForm::open("", "Write a comment...", "Comment", window, cx, move |this, form, event, window, cx| {
-                let CommentFormEvent::Submit(body) = event else {
-                    this.new_comment = None;
-                    this.rebuild(false, cx);
-                    cx.notify();
-                    return;
+            CommentForm::open("", "Write a comment...", primary, window, cx, move |this, form, event, window, cx| {
+                let (body, to_review) = match event {
+                    CommentFormEvent::Submit(body) => (body, true),
+                    CommentFormEvent::SubmitAlt(body) => (body, false),
+                    CommentFormEvent::Cancel => {
+                        this.new_comment = None;
+                        this.rebuild(false, cx);
+                        cx.notify();
+                        return;
+                    }
                 };
                 let Some((first, line)) = this.new_comment.as_ref().map(NewTarget::range) else { return };
                 let m = this.model.read(cx);
                 let Some(commit_id) = m.pr.as_ref().map(|pr| pr.head_sha.clone()) else { return };
                 let (o, r, n) = (m.owner.to_string(), m.repo.to_string(), m.number);
+                let pending = m.pending_review.clone();
                 let params = NewComment {
                     path: m.files[fi].filename.clone(),
                     line,
@@ -499,17 +508,52 @@ impl DiffView {
                     start_line: (first < line).then_some(first),
                 };
                 let model = this.model.clone();
-                save_comment(
+                // The model notification that follows rebuilds the rows.
+                let done = |this: &mut Self, _: &mut Context<Self>| this.new_comment = None;
+                if !to_review {
+                    save_comment(
+                        &model,
+                        form,
+                        "add comment",
+                        window,
+                        cx,
+                        move |s| async move { s.provider().await?.add_comment(&o, &r, n, params).await.map_err(backend::err) },
+                        done,
+                    );
+                    return;
+                }
+                save_with(
                     &model,
                     form,
-                    "add comment",
+                    "add review comment",
                     window,
                     cx,
-                    move |s| async move { s.provider().await?.add_comment(&o, &r, n, params).await.map_err(backend::err) },
-                    // The model notification that follows rebuilds the rows.
-                    |this: &mut Self, _| this.new_comment = None,
+                    move |s| async move {
+                        let p = s.provider().await?;
+                        let created = pending.is_none();
+                        let review = match pending {
+                            Some(review) => review,
+                            None => p.create_pending_review(&o, &r, n, &params.commit_id).await.map_err(backend::err)?,
+                        };
+                        match p.add_review_comment(&review.node_id, params).await {
+                            Ok(comment) => Ok((review, comment)),
+                            Err(e) => {
+                                // GitHub allows one pending review: drop an empty one so a retry can start again.
+                                if created {
+                                    p.delete_pending_review(&o, &r, n, review.id).await.ok();
+                                }
+                                Err(backend::err(e))
+                            }
+                        }
+                    },
+                    |m, (review, comment), cx| {
+                        m.set_pending_review(Some(review), cx);
+                        m.upsert_comment(comment, cx);
+                    },
+                    done,
                 );
             });
+        form.update(cx, |form, _| form.alt_label = Some(single));
         self.new_comment = Some(NewTarget { file: fi, side, anchor: line, end: line, pick_end: false, form, _subscription: subscription });
         self.rebuild(false, cx);
         cx.notify();

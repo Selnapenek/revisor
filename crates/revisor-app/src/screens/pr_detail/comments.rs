@@ -16,6 +16,8 @@ use std::{future::Future, sync::Arc};
 
 pub enum CommentFormEvent {
     Submit(String),
+    /// The optional second button (`alt_label`).
+    SubmitAlt(String),
     Cancel,
 }
 
@@ -23,6 +25,8 @@ pub enum CommentFormEvent {
 pub struct CommentForm {
     input: Entity<TextareaState>,
     submit_label: &'static str,
+    /// Label of a second, non-primary submit button; `None` hides it.
+    pub alt_label: Option<&'static str>,
     busy: bool,
     _subscription: Subscription,
 }
@@ -43,11 +47,11 @@ impl CommentForm {
         });
         input.update(cx, |input, cx| input.focus(window, cx));
         let subscription = cx.subscribe(&input, |this, _, event: &InputEvent, cx| match event {
-            InputEvent::PressEnter { secondary: true, .. } => this.submit(cx),
+            InputEvent::PressEnter { secondary: true, .. } => this.submit(false, cx),
             InputEvent::Change => cx.notify(),
             _ => {}
         });
-        Self { input, submit_label, busy: false, _subscription: subscription }
+        Self { input, submit_label, alt_label: None, busy: false, _subscription: subscription }
     }
 
     /// Create a form owned by `V`; keep the returned subscription for as long as the form is shown.
@@ -73,10 +77,10 @@ impl CommentForm {
         self.input.read(cx).value().trim().to_string()
     }
 
-    fn submit(&mut self, cx: &mut Context<Self>) {
+    fn submit(&mut self, alt: bool, cx: &mut Context<Self>) {
         let body = self.body(cx);
         if !self.busy && !body.is_empty() {
-            cx.emit(CommentFormEvent::Submit(body));
+            cx.emit(if alt { CommentFormEvent::SubmitAlt(body) } else { CommentFormEvent::Submit(body) });
         }
     }
 }
@@ -106,6 +110,14 @@ impl Render for CommentForm {
                             .disabled(self.busy)
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(CommentFormEvent::Cancel))),
                     )
+                    .children(self.alt_label.map(|label| {
+                        Button::new("submit-alt")
+                            .outline()
+                            .small()
+                            .label(label)
+                            .disabled(empty || self.busy)
+                            .on_click(cx.listener(|this, _, _, cx| this.submit(true, cx)))
+                    }))
                     .child(
                         Button::new("submit")
                             .primary()
@@ -113,7 +125,7 @@ impl Render for CommentForm {
                             .label(self.submit_label)
                             .loading(self.busy)
                             .disabled(empty || self.busy)
-                            .on_click(cx.listener(|this, _, _, cx| this.submit(cx))),
+                            .on_click(cx.listener(|this, _, _, cx| this.submit(false, cx))),
                     ),
             )
     }
@@ -131,11 +143,27 @@ pub fn save_comment<V: 'static, Fut>(
 ) where
     Fut: Future<Output = Result<ReviewComment, String>> + Send + 'static,
 {
+    save_with(model, form, what, window, cx, call, |m, comment, cx| m.upsert_comment(comment, cx), done);
+}
+
+/// `save_comment` with a custom model update for the call's result.
+pub fn save_with<V: 'static, T: Send + 'static, Fut>(
+    model: &Entity<PrModel>,
+    form: &Entity<CommentForm>,
+    what: &'static str,
+    window: &Window,
+    cx: &mut Context<V>,
+    call: impl FnOnce(Arc<AppState>) -> Fut,
+    apply: impl FnOnce(&mut PrModel, T, &mut Context<PrModel>) + 'static,
+    done: impl FnOnce(&mut V, &mut Context<V>) + 'static,
+) where
+    Fut: Future<Output = Result<T, String>> + Send + 'static,
+{
     form.update(cx, |form, cx| form.set_busy(true, cx));
     let (model, form) = (model.clone(), form.clone());
     backend::spawn(window, cx, call, move |this, result, window, cx| match result {
-        Ok(comment) => {
-            model.update(cx, |m, cx| m.upsert_comment(comment, cx));
+        Ok(value) => {
+            model.update(cx, |m, cx| apply(m, value, cx));
             done(this, cx);
         }
         Err(e) => {
@@ -181,7 +209,7 @@ impl ThreadView {
         let root = self.root_id;
         self.reply = Some(CommentForm::open("", "Write a reply...", "Reply", window, cx, move |this, form, event, window, cx| {
             match event {
-                CommentFormEvent::Cancel => this.reply = None,
+                CommentFormEvent::Cancel | CommentFormEvent::SubmitAlt(_) => this.reply = None,
                 CommentFormEvent::Submit(body) => {
                     let ((o, r, n), body) = (this.repo(cx), body.clone());
                     let model = this.model.clone();
@@ -283,7 +311,7 @@ impl ThreadView {
         .detach();
     }
 
-    fn comment(&self, c: &ReviewComment, first: bool, own: bool, cx: &Context<Self>) -> impl IntoElement {
+    fn comment(&self, c: &ReviewComment, first: bool, own: bool, pending: bool, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let editing = self.editing.as_ref().filter(|(id, ..)| *id == c.id).map(|(_, form, _)| form.clone());
         let url = c.html_url.clone();
@@ -300,6 +328,7 @@ impl ThreadView {
                     .child(theme::avatar(&c.author_login, &c.author_avatar))
                     .child(div().font_semibold().child(c.author_login.clone()))
                     .child(div().text_color(theme.muted_foreground).child(relative_time(&c.created_at)))
+                    .when(pending, |el| el.child(theme::stamp("Pending", theme.warning, theme)))
                     .child(div().flex_1())
                     .when(own && self.interactive && editing.is_none(), |el| {
                         let id = c.id;
@@ -384,9 +413,11 @@ impl Render for ThreadView {
         }
 
         let me = app::current_user(cx).map(|u| u.login);
+        // Pending threads are not on GitHub yet: no reply or resolve until the review is submitted.
+        let pending_root = model.is_pending(&thread.root);
         let comments = std::iter::once(&thread.root).chain(&thread.replies).enumerate().map(|(i, c)| {
             let own = me.as_deref() == Some(c.author_login.as_str());
-            self.comment(c, i == 0, own, cx)
+            self.comment(c, i == 0, own, model.is_pending(c), cx)
         });
         let footer = match &self.reply {
             Some((form, _)) => div().p_3().border_t_1().border_color(theme.border).child(form.clone()),
@@ -440,7 +471,7 @@ impl Render for ThreadView {
                 )
             })
             .child(v_flex().when(resolved, |el| el.opacity(0.7)).children(comments))
-            .when(self.interactive, |el| el.child(footer))
+            .when(self.interactive && !pending_root, |el| el.child(footer))
     }
 }
 

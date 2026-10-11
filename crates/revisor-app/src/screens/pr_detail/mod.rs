@@ -6,6 +6,7 @@ mod commits;
 mod conversations;
 mod diff;
 mod files;
+mod review;
 mod semantic;
 mod syntax;
 pub mod state;
@@ -67,8 +68,15 @@ pub struct PrDetailScreen {
 }
 
 impl PrDetailScreen {
-    pub fn new(owner: SharedString, repo: SharedString, number: u64, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let model = cx.new(|cx| PrModel::new(owner, repo, number, cx));
+    pub fn new(
+        owner: SharedString,
+        repo: SharedString,
+        number: u64,
+        viewer: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let model = cx.new(|cx| PrModel::new(owner, repo, number, viewer, cx));
         let files = cx.new(|cx| files::FilesPanel::new(model.clone(), window, cx));
         let conversations = cx.new(|cx| conversations::ConversationsPanel::new(model.clone(), window, cx));
         let semantic = cx.new(|cx| semantic::SemanticPanel::new(model.clone(), window, cx));
@@ -175,6 +183,16 @@ impl PrDetailScreen {
                     .tooltip("Open on GitHub")
                     .on_click(move |_, _, cx| cx.open_url(&url))
             }))
+            .children(model.pr.as_ref().map(|_| {
+                let count = model.pending_count();
+                let button = Button::new("review").small().tooltip("Submit a review: comment, approve or request changes");
+                let button = if model.pending_review.is_some() {
+                    button.primary().label(format!("Finish review ({count})"))
+                } else {
+                    button.ghost().label("Review")
+                };
+                button.on_click(cx.listener(|this, _, window, cx| this.open_review(window, cx)))
+            }))
             .children(model.pr.as_ref().map(|pr| {
                 let has_body = pr.body.as_deref().is_some_and(|b| !b.trim().is_empty());
                 Button::new("description-toggle")
@@ -188,6 +206,11 @@ impl PrDetailScreen {
                         cx.notify();
                     }))
             }))
+    }
+
+    fn open_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let panel = cx.new(|cx| review::ReviewPanel::new(self.model.clone(), window, cx));
+        window.open_dialog(cx, move |dialog, _, _| dialog.title("Finish your review").w(px(520.)).child(panel.clone()));
     }
 
     /// PR body for the right sidebar; `None` when the PR has no description.

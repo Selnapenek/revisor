@@ -512,6 +512,8 @@ impl From<GhIssueComment> for IssueComment {
 #[derive(Deserialize)]
 struct GhPrReview {
     id: u64,
+    #[serde(default)]
+    node_id: String,
     body: Option<String>,
     state: String,
     user: GhPrUser,
@@ -523,6 +525,7 @@ impl From<GhPrReview> for PrReview {
     fn from(r: GhPrReview) -> Self {
         Self {
             id: r.id,
+            node_id: r.node_id,
             body: r.body.unwrap_or_default(),
             state: r.state,
             author_login: r.user.login,
@@ -772,6 +775,128 @@ impl GitProvider for GithubProvider {
 
         let comment: GhReviewComment = self.post(&url, &new_comment_body(&params)).await?;
         Ok(comment.into())
+    }
+
+    async fn create_pending_review(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        commit_id: &str,
+    ) -> Result<PrReview> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}/reviews",
+            owner, repo, number
+        );
+        // No `event` = the review stays PENDING.
+        let payload = serde_json::json!({ "commit_id": commit_id });
+        let review: GhPrReview = self.post(&url, &payload).await?;
+        Ok(review.into())
+    }
+
+    async fn add_review_comment(
+        &self,
+        review_node_id: &str,
+        params: NewComment,
+    ) -> Result<ReviewComment> {
+        const MUTATION: &str = r#"
+            mutation($input: AddPullRequestReviewThreadInput!) {
+                addPullRequestReviewThread(input: $input) {
+                    thread {
+                        comments(first: 1) {
+                            nodes {
+                                databaseId path line originalLine diffHunk body
+                                author { login avatarUrl }
+                                createdAt updatedAt url
+                                pullRequestReview { databaseId }
+                            }
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let mut input = serde_json::json!({
+            "pullRequestReviewId": review_node_id,
+            "path": params.path,
+            "line": params.line,
+            "side": params.side,
+            "body": params.body,
+        });
+        if let Some(start) = params.start_line {
+            input["startLine"] = start.into();
+            input["startSide"] = params.side.clone().into();
+        }
+
+        let data = self.graphql(MUTATION, serde_json::json!({ "input": input })).await?;
+        let node = &data["addPullRequestReviewThread"]["thread"]["comments"]["nodes"][0];
+        review_comment_from_graphql(node, &params.side)
+    }
+
+    async fn get_review_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        review_id: u64,
+    ) -> Result<Vec<ReviewComment>> {
+        let mut all_comments = Vec::new();
+        let mut page = 1u32;
+
+        loop {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/pulls/{}/reviews/{}/comments?per_page=100&page={}",
+                owner, repo, number, review_id, page
+            );
+
+            let (items, has_next): (Vec<GhReviewComment>, bool) =
+                self.get_with_pagination(&url).await?;
+
+            all_comments.extend(items.into_iter().map(ReviewComment::from));
+
+            if !has_next {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(all_comments)
+    }
+
+    async fn submit_review(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        pending_id: Option<u64>,
+        event: ReviewEvent,
+        body: &str,
+    ) -> Result<()> {
+        let base = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}/reviews",
+            owner, repo, number
+        );
+        let url = match pending_id {
+            Some(id) => format!("{}/{}/events", base, id),
+            None => base,
+        };
+        let payload = serde_json::json!({ "event": event.as_str(), "body": body });
+        let _: serde_json::Value = self.post(&url, &payload).await?;
+        Ok(())
+    }
+
+    async fn delete_pending_review(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        review_id: u64,
+    ) -> Result<()> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}/reviews/{}",
+            owner, repo, number, review_id
+        );
+        self.delete_request(&url).await
     }
 
     async fn reply_to_comment(
@@ -1131,6 +1256,34 @@ fn new_comment_body(params: &NewComment) -> serde_json::Value {
     body
 }
 
+/// Map a GraphQL `PullRequestReviewComment` node to `ReviewComment`.
+/// `side` comes from the request: the node has no plain side field.
+fn review_comment_from_graphql(node: &serde_json::Value, side: &str) -> Result<ReviewComment> {
+    let id = node["databaseId"]
+        .as_u64()
+        .ok_or_else(|| anyhow::anyhow!("GraphQL review comment missing databaseId"))?;
+    let text = |key: &str| node[key].as_str().unwrap_or_default().to_string();
+    let line = node["line"].as_u64();
+    let original_line = node["originalLine"].as_u64();
+    Ok(ReviewComment {
+        id,
+        path: text("path"),
+        line,
+        original_line,
+        side: Some(side.to_string()),
+        diff_hunk: text("diffHunk"),
+        body: text("body"),
+        author_login: node["author"]["login"].as_str().unwrap_or_default().to_string(),
+        author_avatar: node["author"]["avatarUrl"].as_str().unwrap_or_default().to_string(),
+        created_at: text("createdAt"),
+        updated_at: text("updatedAt"),
+        in_reply_to_id: None,
+        review_id: node["pullRequestReview"]["databaseId"].as_u64(),
+        html_url: text("url"),
+        outdated: line.is_none() && original_line.is_some(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1151,5 +1304,30 @@ mod tests {
         assert_eq!(body["start_line"], 10);
         assert_eq!(body["start_side"], "RIGHT");
         assert_eq!(body["line"], 14);
+    }
+
+    #[test]
+    fn review_comment_from_graphql_maps_fields() {
+        let node = serde_json::json!({
+            "databaseId": 42,
+            "path": "a.rs",
+            "line": 14,
+            "originalLine": 14,
+            "diffHunk": "@@ -1 +1 @@",
+            "body": "nit",
+            "author": { "login": "me", "avatarUrl": "https://a" },
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "url": "https://github.com/o/r/pull/1#discussion_r42",
+            "pullRequestReview": { "databaseId": 7 },
+        });
+        let c = review_comment_from_graphql(&node, "LEFT").unwrap();
+        assert_eq!(c.id, 42);
+        assert_eq!(c.line, Some(14));
+        assert_eq!(c.side.as_deref(), Some("LEFT"));
+        assert_eq!(c.review_id, Some(7));
+        assert_eq!(c.author_login, "me");
+        assert!(!c.outdated);
+        assert!(review_comment_from_graphql(&serde_json::Value::Null, "RIGHT").is_err());
     }
 }

@@ -71,6 +71,51 @@ pub trait GitProvider: Send + Sync {
         params: NewComment,
     ) -> Result<ReviewComment>;
 
+    /// Start a PENDING review (no event); comments are added with `add_review_comment`
+    async fn create_pending_review(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        commit_id: &str,
+    ) -> Result<PrReview>;
+
+    /// Add a line comment to a pending review (by review GraphQL node ID)
+    async fn add_review_comment(
+        &self,
+        review_node_id: &str,
+        params: NewComment,
+    ) -> Result<ReviewComment>;
+
+    /// Get comments of one review (pending review comments included)
+    async fn get_review_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        review_id: u64,
+    ) -> Result<Vec<ReviewComment>>;
+
+    /// Submit the pending review, or create and submit a review at once when `pending_id` is None
+    async fn submit_review(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        pending_id: Option<u64>,
+        event: ReviewEvent,
+        body: &str,
+    ) -> Result<()>;
+
+    /// Discard a pending review and its comments
+    async fn delete_pending_review(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        review_id: u64,
+    ) -> Result<()>;
+
     /// Reply to an existing comment
     async fn reply_to_comment(
         &self,
