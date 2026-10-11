@@ -55,6 +55,7 @@ pub struct PrDetailScreen {
     model: Entity<PrModel>,
     tab: SidebarTab,
     sidebar_width: Option<Pixels>,
+    sidebar_open: bool,
     description_open: bool,
     focus: FocusHandle,
     files: Entity<files::FilesPanel>,
@@ -88,6 +89,7 @@ impl PrDetailScreen {
             model,
             tab: SidebarTab::Files,
             sidebar_width: None,
+            sidebar_open: true,
             description_open: true,
             focus,
             files,
@@ -120,6 +122,12 @@ impl PrDetailScreen {
             .child(Button::new("back").ghost().small().label("← PRs").on_click(move |_, window, cx| {
                 app::navigate(Route::PrList { owner: owner.clone(), repo: repo.clone() }, window, cx)
             }))
+            .child(Button::new("sidebar-toggle").ghost().small().label("Sidebar").selected(self.sidebar_open).on_click(
+                cx.listener(|this, _, _, cx| {
+                    this.sidebar_open = !this.sidebar_open;
+                    cx.notify();
+                }),
+            ))
             .children(model.pr.as_ref().map(|pr| {
                 let tag = if pr.merged_at.is_some() {
                     Tag::color(ColorName::Purple).child("Merged")
@@ -224,10 +232,12 @@ impl Render for PrDetailScreen {
             .on_action(cx.listener(|this, _: &NextFile, _, cx| this.model.update(cx, |m, cx| m.navigate_file(1, cx))))
             .on_action(cx.listener(|this, _: &ToggleConversations, _, cx| {
                 this.tab = if this.tab == SidebarTab::Files { SidebarTab::Conversations } else { SidebarTab::Files };
+                this.sidebar_open = true;
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &FocusFileFilter, window, cx| {
                 this.tab = SidebarTab::Files;
+                this.sidebar_open = true;
                 this.files.update(cx, |files, cx| files.focus_filter(window, cx));
                 cx.notify();
             }))
@@ -235,13 +245,21 @@ impl Render for PrDetailScreen {
             .child(match (loading, self.sidebar_width) {
                 (false, Some(width)) => h_resizable("pr-detail-split")
                     .on_resize(cx.listener(|this, state: &Entity<ResizableState>, _, cx| {
-                        if let Some(&width) = state.read(cx).sizes().first() {
+                        // Hidden left panel has no real width; keep the saved one.
+                        if let Some(&width) = state.read(cx).sizes().first().filter(|_| this.sidebar_open) {
                             this.sidebar_width = Some(width);
                             this.save_width(width, cx);
                         }
                     }))
                     // flex_none: sized side panels keep their width when the other one toggles.
-                    .child(resizable_panel().size(width).size_range(px(180.)..px(600.)).flex_none().child(self.sidebar(cx)))
+                    .child(
+                        resizable_panel()
+                            .visible(self.sidebar_open)
+                            .size(width)
+                            .size_range(px(180.)..px(600.))
+                            .flex_none()
+                            .child(self.sidebar(cx)),
+                    )
                     // Opaque so code stays readable over the blurred window.
                     .child(resizable_panel().child(div().size_full().bg(cx.theme().colors.list).child(self.diff.clone())))
                     .child(
