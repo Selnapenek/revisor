@@ -61,6 +61,8 @@ impl ReposScreen {
                 queries::get_saved_repos(cache.conn()).map_err(backend::err)
             },
             |this: &mut Self, result, window, cx| match result {
+                // First run: nothing saved yet, so show the user's repos instead of an empty tab.
+                Ok(saved) if saved.is_empty() && this.tab == SAVED => this.select_tab(BROWSE, window, cx),
                 Ok(saved) => this.saved = saved,
                 Err(e) => window.push_notification(Notification::error(format!("Failed to load saved repos: {e}")), cx),
             },
@@ -305,7 +307,6 @@ impl ReposScreen {
 impl Render for ReposScreen {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let login = app::current_user(cx).map(|u| u.login);
         let header = h_flex()
             .flex_shrink_0()
             .justify_between()
@@ -328,17 +329,13 @@ impl Render for ReposScreen {
                             .child(Tab::new().label("Browse")),
                     ),
             )
+            // The status bar already shows who is signed in.
             .child(
-                h_flex()
-                    .gap_3()
-                    .children(login.map(|l| div().text_xs().text_color(theme.muted_foreground).child(l)))
-                    .child(
-                        Button::new("sign-out")
-                            .ghost()
-                            .small()
-                            .label("Sign out")
-                            .on_click(|_, window, cx| app::sign_out(window, cx)),
-                    ),
+                Button::new("sign-out")
+                    .ghost()
+                    .small()
+                    .label("Sign out")
+                    .on_click(|_, window, cx| app::sign_out(window, cx)),
             );
         let content = if self.tab == SAVED { self.render_saved(cx) } else { self.render_browse(cx) };
         v_flex().size_full().child(header).child(

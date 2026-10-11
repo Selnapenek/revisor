@@ -632,7 +632,13 @@ impl DiffView {
                     .label("Viewed")
                     .checked(model.reviewed.contains(&file.filename))
                     .on_click(cx.listener(move |this, _: &bool, _, cx| {
-                        this.model.update(cx, |m, cx| m.toggle_reviewed(&reviewed, cx))
+                        this.model.update(cx, |m, cx| {
+                            m.toggle_reviewed(&reviewed, cx);
+                            // The file collapsed: pin its header to the top so the next file follows right below.
+                            if m.reviewed.contains(reviewed.as_ref()) {
+                                cx.emit(PrEvent::ScrollTo(ScrollTarget::File(reviewed.to_string())));
+                            }
+                        })
                     })),
             )
     }
@@ -838,6 +844,17 @@ impl DiffView {
             .when(model.files_loading, |el| el.child(Spinner::new().xsmall()))
             .child(div().flex_1())
             .child(
+                Button::new("search-toggle")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Search)
+                    .selected(model.search.is_some())
+                    .tooltip("Search in diff (⌘F)")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.model.update(cx, |m, cx| if m.search.is_some() { m.close_search(cx) } else { m.open_search(cx) })
+                    })),
+            )
+            .child(
                 h_flex()
                     .gap_0p5()
                     .child(mode_button("mode-split", "Split", DiffMode::Split))
@@ -891,14 +908,22 @@ impl Render for DiffView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let model = self.model.read(cx);
         let body = if model.visible.is_empty() {
-            div()
+            let filtered = !(model.filter_query.is_empty() && model.include.is_empty() && model.exclude.is_empty());
+            v_flex()
                 .flex_1()
-                .flex()
                 .items_center()
                 .justify_center()
+                .gap_2()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("No files to review")
+                .child(if filtered { "No files match the sidebar filters" } else { "No files to review" })
+                .when(filtered, |el| {
+                    el.child(Button::new("diff-clear-filters").link().small().label("Clear filters").on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.model.update(cx, |m, cx| m.set_filter(String::new(), String::new(), String::new(), cx))
+                        },
+                    )))
+                })
         } else {
             // Pin the header of the file at the top of the viewport.
             let top = self.rows.get(self.list.logical_scroll_top().item_ix).map(|r| r.file());

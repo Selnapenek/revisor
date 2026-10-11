@@ -408,7 +408,8 @@ impl FocusPanel {
         ];
         Self {
             model,
-            expanded: true,
+            // Experimental and needs a TypeSafe key: keep the file list in view until asked for.
+            expanded: false,
             has_key: false,
             show_key_form: false,
             key,

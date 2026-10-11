@@ -7,12 +7,25 @@ use gpui_kit::{prelude::*, *};
 use revisor_core::provider::types::{ProviderUser, RateLimitInfo};
 use std::time::Duration;
 
+actions!(revisor_nav, [GoBack]);
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Route {
     Auth,
     Repos,
     PrList { owner: SharedString, repo: SharedString },
     PrDetail { owner: SharedString, repo: SharedString, number: u64 },
+}
+
+impl Route {
+    /// Screen that "Back" returns to.
+    fn parent(&self) -> Option<Route> {
+        match self {
+            Route::PrDetail { owner, repo, .. } => Some(Route::PrList { owner: owner.clone(), repo: repo.clone() }),
+            Route::PrList { .. } => Some(Route::Repos),
+            Route::Auth | Route::Repos => None,
+        }
+    }
 }
 
 struct Nav(WeakEntity<AppRoot>);
@@ -22,6 +35,17 @@ impl Global for Nav {}
 pub fn navigate(route: Route, window: &mut Window, cx: &mut App) {
     let root = cx.global::<Nav>().0.clone();
     root.update(cx, |root, cx| root.go(route, window, cx)).ok();
+}
+
+/// Go one level up (PR detail → PR list → repos).
+pub fn go_back(window: &mut Window, cx: &mut App) {
+    let root = cx.global::<Nav>().0.clone();
+    root.update(cx, |root, cx| {
+        if let Some(route) = root.route.parent() {
+            root.go(route, window, cx);
+        }
+    })
+    .ok();
 }
 
 pub fn set_user(user: Option<ProviderUser>, window: &mut Window, cx: &mut App) {

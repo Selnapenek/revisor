@@ -16,7 +16,7 @@ use gpui_kit::component::{
     *,
 };
 use gpui_kit::{prelude::*, *};
-use revisor_core::pr_filters::{self, REVIEW_STATUS_OPTIONS};
+use revisor_core::pr_filters::{self, REVIEW_REQUESTED_ME, REVIEW_STATUS_OPTIONS};
 use revisor_core::provider::types::{Label, PrSearchFilters, PrState, PrUser, PullRequest};
 use revisor_core::time::relative_time;
 use std::{ops::Range, time::Duration};
@@ -46,6 +46,8 @@ pub struct PrListScreen {
     page: u32,
     has_next: bool,
     loading: bool,
+    /// Page 1 failed to load; shown in place of the list.
+    error: Option<SharedString>,
     scroll: UniformListScrollHandle,
     _load: Task<()>,
     _debounce: Task<()>,
@@ -109,6 +111,7 @@ impl PrListScreen {
             page: 1,
             has_next: false,
             loading: true,
+            error: None,
             scroll: UniformListScrollHandle::new(),
             _load: load,
             _debounce: Task::ready(()),
@@ -156,8 +159,15 @@ impl PrListScreen {
                         }
                         this.page = page;
                         this.has_next = result.has_next_page;
+                        this.error = None;
                     }
-                    Err(e) => window.push_notification(Notification::error(format!("Failed to load PRs: {e}")), cx),
+                    // Page 1 replaces the list: drop rows of the previous tab/filters, show the error inline.
+                    Err(e) if page == 1 => {
+                        this.prs.clear();
+                        this.has_next = false;
+                        this.error = Some(e.into());
+                    }
+                    Err(e) => window.push_notification(Notification::error(format!("Failed to load more PRs: {e}")), cx),
                 }
             },
         );
@@ -254,6 +264,8 @@ impl PrListScreen {
     fn render_filters(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let login = app::current_user(cx).map(|u| u.login);
         let f = &self.filters;
+        let mine = login.as_ref().is_some_and(|l| f.authors == [l.clone()]);
+        let awaiting = f.review_status.as_deref() == Some(REVIEW_REQUESTED_ME);
         let user_options = |users: &[PrUser], selected: &[String]| -> Vec<DropdownOption> {
             users.iter().map(|u| (u.login.clone(), u.login.clone(), None, selected.contains(&u.login))).collect()
         };
@@ -285,9 +297,12 @@ impl PrListScreen {
                     .ghost()
                     .small()
                     .label("Authored by me")
+                    .selected(mine)
                     .disabled(login.is_none())
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        if let Some(login) = login.clone() {
+                        if mine {
+                            this.update_filters(|f| f.authors.clear(), window, cx);
+                        } else if let Some(login) = login.clone() {
                             this.update_filters(|f| *f = pr_filters::with_author_preset(f, &login), window, cx);
                         }
                     })),
@@ -297,9 +312,14 @@ impl PrListScreen {
                     .ghost()
                     .small()
                     .label("Needs review from me")
+                    .selected(awaiting)
                     .disabled(app::current_user(cx).is_none())
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.update_filters(|f| *f = pr_filters::with_review_requested_preset(f), window, cx)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if awaiting {
+                            this.update_filters(|f| f.review_status = None, window, cx);
+                        } else {
+                            this.update_filters(|f| *f = pr_filters::with_review_requested_preset(f), window, cx);
+                        }
                     })),
             )
             .child(self.dropdown(
@@ -422,6 +442,21 @@ impl PrListScreen {
         let body = if self.visible.is_empty() {
             let content = if self.loading {
                 div().child(Spinner::new().large().color(theme.muted_foreground))
+            } else if let Some(error) = self.error.clone() {
+                v_flex()
+                    .items_center()
+                    .gap_2()
+                    .max_w(px(480.))
+                    .text_sm()
+                    .child(div().font_medium().child("Couldn't load pull requests"))
+                    .child(div().text_xs().text_center().text_color(theme.muted_foreground).child(error))
+                    .child(
+                        Button::new("retry")
+                            .primary()
+                            .small()
+                            .label("Retry")
+                            .on_click(cx.listener(|this, _, window, cx| this.load(1, window, cx))),
+                    )
             } else {
                 let filtered = !self.filters.is_empty();
                 v_flex()
@@ -478,7 +513,8 @@ impl Render for PrListScreen {
                     .ghost()
                     .small()
                     .label("← Repos")
-                    .on_click(|_, window, cx| app::navigate(Route::Repos, window, cx)),
+                    .tooltip("Back (⌘[)")
+                    .on_click(|_, window, cx| app::go_back(window, cx)),
             )
             .child(
                 h_flex()

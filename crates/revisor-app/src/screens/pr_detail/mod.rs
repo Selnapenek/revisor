@@ -10,7 +10,7 @@ mod semantic;
 mod syntax;
 pub mod state;
 
-use crate::app::{self, Route};
+use crate::app;
 use crate::{backend, theme};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
@@ -110,7 +110,6 @@ impl PrDetailScreen {
 
     fn header(&self, cx: &Context<Self>) -> impl IntoElement {
         let model = self.model.read(cx);
-        let (owner, repo) = (model.owner.clone(), model.repo.clone());
         h_flex()
             .flex_shrink_0()
             .gap_3()
@@ -119,9 +118,14 @@ impl PrDetailScreen {
             .border_b_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().secondary)
-            .child(Button::new("back").ghost().small().label("← PRs").on_click(move |_, window, cx| {
-                app::navigate(Route::PrList { owner: owner.clone(), repo: repo.clone() }, window, cx)
-            }))
+            .child(
+                Button::new("back")
+                    .ghost()
+                    .small()
+                    .label("← PRs")
+                    .tooltip("Back (⌘[)")
+                    .on_click(|_, window, cx| app::go_back(window, cx)),
+            )
             .child(Button::new("sidebar-toggle").ghost().small().label("Sidebar").selected(self.sidebar_open).on_click(
                 cx.listener(|this, _, _, cx| {
                     this.sidebar_open = !this.sidebar_open;
@@ -153,8 +157,26 @@ impl PrDetailScreen {
                             .child(theme::avatar(&pr.author_login, &pr.author_avatar))
                             .child(format!("{} · {}", pr.author_login, relative_time(&pr.updated_at))),
                     )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!("{} ← {}", pr.base_ref, pr.head_ref)),
+                    )
             }))
             .child(div().flex_1())
+            .children(model.pr.as_ref().map(|pr| {
+                let url = pr.html_url.clone();
+                Button::new("open-github")
+                    .ghost()
+                    .small()
+                    .icon(IconName::ExternalLink)
+                    .tooltip("Open on GitHub")
+                    .on_click(move |_, _, cx| cx.open_url(&url))
+            }))
             .children(model.pr.as_ref().map(|pr| {
                 let has_body = pr.body.as_deref().is_some_and(|b| !b.trim().is_empty());
                 Button::new("description-toggle")
@@ -182,6 +204,39 @@ impl PrDetailScreen {
                 .text_sm()
                 .child(TextView::markdown("pr-description", body))
                 .overflow_y_scrollbar(),
+        )
+    }
+
+    /// Shown instead of the split when the PR failed to load.
+    fn load_error(&self, error: SharedString, cx: &Context<Self>) -> impl IntoElement {
+        let number = self.model.read(cx).number;
+        div().flex_1().flex().items_center().justify_center().child(
+            v_flex()
+                .items_center()
+                .gap_2()
+                .max_w(px(480.))
+                .text_sm()
+                .child(div().font_medium().child(format!("Couldn't load pull request #{number}")))
+                .child(div().text_xs().text_center().text_color(cx.theme().muted_foreground).child(error))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .mt_2()
+                        .child(
+                            Button::new("retry")
+                                .primary()
+                                .small()
+                                .label("Retry")
+                                .on_click(cx.listener(|this, _, _, cx| this.model.update(cx, |m, cx| m.reload(cx)))),
+                        )
+                        .child(
+                            Button::new("error-back")
+                                .ghost()
+                                .small()
+                                .label("Back to pull requests")
+                                .on_click(|_, window, cx| app::go_back(window, cx)),
+                        ),
+                ),
         )
     }
 
@@ -219,7 +274,8 @@ impl PrDetailScreen {
 
 impl Render for PrDetailScreen {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let loading = self.model.read(cx).loading;
+        let model = self.model.read(cx);
+        let (loading, error) = (model.loading, model.error.clone());
         let description = self.description(cx);
         let show_description = self.description_open && description.is_some();
         v_flex()
@@ -242,8 +298,9 @@ impl Render for PrDetailScreen {
                 cx.notify();
             }))
             .child(self.header(cx))
-            .child(match (loading, self.sidebar_width) {
-                (false, Some(width)) => h_resizable("pr-detail-split")
+            .child(match (loading, error, self.sidebar_width) {
+                (false, Some(error), _) => self.load_error(error, cx).into_any_element(),
+                (false, None, Some(width)) => h_resizable("pr-detail-split")
                     .on_resize(cx.listener(|this, state: &Entity<ResizableState>, _, cx| {
                         // Hidden left panel has no real width; keep the saved one.
                         if let Some(&width) = state.read(cx).sizes().first().filter(|_| this.sidebar_open) {

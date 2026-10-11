@@ -4,6 +4,8 @@ use crate::cache::queries::{get_setting, set_setting};
 use crate::provider::types::{PrSearchFilters, PrUser, PullRequest};
 use rusqlite::Connection;
 
+pub const REVIEW_REQUESTED_ME: &str = "review-requested:@me";
+
 /// `(value, label)` pairs for the review status filter.
 pub const REVIEW_STATUS_OPTIONS: [(&str, &str); 7] = [
     ("none", "No reviews"),
@@ -12,7 +14,7 @@ pub const REVIEW_STATUS_OPTIONS: [(&str, &str); 7] = [
     ("changes_requested", "Changes requested"),
     ("reviewed-by:@me", "Reviewed by you"),
     ("-reviewed-by:@me", "Not reviewed by you"),
-    ("review-requested:@me", "Awaiting your review"),
+    (REVIEW_REQUESTED_ME, "Awaiting your review"),
 ];
 
 fn key(repo_key: &str) -> String {
@@ -40,7 +42,7 @@ pub fn with_author_preset(filters: &PrSearchFilters, login: &str) -> PrSearchFil
 }
 
 pub fn with_review_requested_preset(filters: &PrSearchFilters) -> PrSearchFilters {
-    PrSearchFilters { review_status: Some("review-requested:@me".into()), ..filters.clone() }
+    PrSearchFilters { review_status: Some(REVIEW_REQUESTED_ME.into()), ..filters.clone() }
 }
 
 /// Add `value` if absent, remove it if present.

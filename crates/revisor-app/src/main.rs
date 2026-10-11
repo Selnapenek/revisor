@@ -23,7 +23,15 @@ fn main() {
             screens::pr_detail::init(cx);
 
             cx.on_action(|_: &Quit, cx| cx.quit());
-            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+            // Global, so it works with nothing focused. Deferred: action handlers run inside a window update.
+            cx.on_action(|_: &app::GoBack, cx| {
+                cx.defer(|cx| {
+                    if let Some(window) = cx.active_window() {
+                        window.update(cx, |_, window, cx| app::go_back(window, cx)).ok();
+                    }
+                })
+            });
+            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None), KeyBinding::new("cmd-[", app::GoBack, None)]);
             cx.set_menus([Menu {
                 name: "Revisor".into(),
                 items: vec![MenuItem::action("Quit Revisor", Quit)],

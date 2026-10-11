@@ -69,6 +69,8 @@ pub struct PrModel {
     pub commits: Vec<Commit>,
     pub selection: CommitSelection,
     pub loading: bool,
+    /// The PR failed to load; the screen shows it with a retry.
+    pub error: Option<SharedString>,
     pub files_loading: bool,
     pub selected: Option<String>,
     pub collapsed: HashSet<String>,
@@ -87,46 +89,7 @@ impl EventEmitter<PrEvent> for PrModel {}
 
 impl PrModel {
     pub fn new(owner: SharedString, repo: SharedString, number: u64, cx: &mut Context<Self>) -> Self {
-        let (o, r) = (owner.to_string(), repo.to_string());
-        let load = backend::call(cx, move |s| async move {
-            let p = s.provider().await?;
-            let (pr, files, comments, issue_comments, reviews, resolutions, commits) = tokio::try_join!(
-                async { p.get_pull_request(&o, &r, number).await.map_err(backend::err) },
-                fetch_pr_files(&*p, &o, &r, number),
-                async { p.get_pr_comments(&o, &r, number).await.map_err(backend::err) },
-                async { p.get_issue_comments(&o, &r, number).await.map_err(backend::err) },
-                async { p.get_pr_reviews(&o, &r, number).await.map_err(backend::err) },
-                async { p.get_thread_resolutions(&o, &r, number).await.map_err(backend::err) },
-                async { p.get_pr_commits(&o, &r, number).await.map_err(backend::err) },
-            )?;
-            drop(p);
-            let reviewed = queries::get_reviewed_files(s.cache.lock().await.conn(), &o, &r, number)
-                .map_err(backend::err)?;
-            Ok((pr, files, comments, issue_comments, reviews, resolutions, commits, reviewed))
-        });
-        let task = cx.spawn(async move |this, cx| {
-            let result = load.await;
-            this.update(cx, |this, cx| {
-                this.loading = false;
-                match result {
-                    Ok((pr, files, comments, issue_comments, reviews, resolutions, commits, reviewed)) => {
-                        this.pr = Some(pr);
-                        this.comments = comments;
-                        this.issue_comments = issue_comments;
-                        this.reviews = reviews;
-                        this.resolutions = resolutions;
-                        this.commits = commits;
-                        this.reviewed = reviewed.into_iter().collect();
-                        this.rebuild_threads();
-                        this.set_files(files, cx);
-                    }
-                    Err(e) => notify_error(format!("Failed to load PR: {e}"), cx),
-                }
-                cx.notify();
-            })
-            .ok();
-        });
-        Self {
+        let mut this = Self {
             owner,
             repo,
             number,
@@ -143,6 +106,7 @@ impl PrModel {
             commits: vec![],
             selection: CommitSelection::All,
             loading: true,
+            error: None,
             files_loading: false,
             selected: None,
             collapsed: HashSet::new(),
@@ -153,9 +117,59 @@ impl PrModel {
             search: None,
             file_lines: HashMap::new(),
             file_lines_pending: HashSet::new(),
-            _load: task,
+            _load: Task::ready(()),
             _files_load: None,
-        }
+        };
+        this.reload(cx);
+        this
+    }
+
+    /// (Re)load the PR and everything the screen shows.
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        self.loading = true;
+        self.error = None;
+        let (o, r, number) = (self.owner.to_string(), self.repo.to_string(), self.number);
+        let load = backend::call(cx, move |s| async move {
+            let p = s.provider().await?;
+            let (pr, files, comments, issue_comments, reviews, resolutions, commits) = tokio::try_join!(
+                async { p.get_pull_request(&o, &r, number).await.map_err(backend::err) },
+                fetch_pr_files(&*p, &o, &r, number),
+                async { p.get_pr_comments(&o, &r, number).await.map_err(backend::err) },
+                async { p.get_issue_comments(&o, &r, number).await.map_err(backend::err) },
+                async { p.get_pr_reviews(&o, &r, number).await.map_err(backend::err) },
+                async { p.get_thread_resolutions(&o, &r, number).await.map_err(backend::err) },
+                async { p.get_pr_commits(&o, &r, number).await.map_err(backend::err) },
+            )?;
+            drop(p);
+            let reviewed = queries::get_reviewed_files(s.cache.lock().await.conn(), &o, &r, number)
+                .map_err(backend::err)?;
+            Ok((pr, files, comments, issue_comments, reviews, resolutions, commits, reviewed))
+        });
+        self._load = cx.spawn(async move |this, cx| {
+            let result = load.await;
+            this.update(cx, |this, cx| {
+                this.loading = false;
+                match result {
+                    Ok((pr, files, comments, issue_comments, reviews, resolutions, commits, reviewed)) => {
+                        this.pr = Some(pr);
+                        this.comments = comments;
+                        this.issue_comments = issue_comments;
+                        this.reviews = reviews;
+                        this.resolutions = resolutions;
+                        this.commits = commits;
+                        this.reviewed = reviewed.into_iter().collect();
+                        this.rebuild_threads();
+                        this.set_files(files, cx);
+                        // Files already viewed in an earlier session start collapsed.
+                        this.collapsed = this.reviewed.clone();
+                    }
+                    Err(e) => this.error = Some(e.into()),
+                }
+                cx.notify();
+            })
+            .ok();
+        });
+        cx.notify();
     }
 
     fn set_files(&mut self, files: Vec<ProcessedFile>, cx: &mut Context<Self>) {
@@ -304,11 +318,14 @@ impl PrModel {
         cx.notify();
     }
 
-    /// Optimistic toggle; rolls back if saving fails.
+    /// Optimistic toggle; rolls back if saving fails. Viewed files collapse, unviewed ones expand.
     pub fn toggle_reviewed(&mut self, path: &str, cx: &mut Context<Self>) {
         let was = !self.reviewed.insert(path.to_string());
         if was {
             self.reviewed.remove(path);
+            self.collapsed.remove(path);
+        } else {
+            self.collapsed.insert(path.to_string());
         }
         let (o, r, n, p) = (self.owner.to_string(), self.repo.to_string(), self.number, path.to_string());
         let save = backend::call(cx, move |s| async move {
