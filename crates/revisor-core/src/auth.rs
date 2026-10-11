@@ -52,6 +52,32 @@ pub async fn validate_and_store_token(
     Ok(user)
 }
 
+/// Signs in with the token of the active GitHub CLI (`gh`) account.
+pub async fn sign_in_with_gh_cli(state: &AppState) -> Result<ProviderUser, String> {
+    // Apps started from Finder do not get the shell PATH, so try the usual install paths too.
+    // ponytail: fixed Homebrew paths; use a login-shell lookup like Jean if gh lives elsewhere
+    for gh in ["gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"] {
+        let output = match tokio::process::Command::new(gh)
+            .args(["auth", "token"])
+            .output()
+            .await
+        {
+            Ok(output) => output,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("Could not run GitHub CLI: {e}")),
+        };
+        if !output.status.success() {
+            return Err(
+                "GitHub CLI is not signed in. Run `gh auth login` in Terminal, then try again."
+                    .into(),
+            );
+        }
+        let token = String::from_utf8_lossy(&output.stdout).into_owned();
+        return validate_and_store_token(state, token).await;
+    }
+    Err("GitHub CLI not found. Install it from https://cli.github.com.".into())
+}
+
 pub async fn start_github_login(state: &AppState) -> Result<DeviceLoginInfo, String> {
     let client_id = option_env!("REVISOR_GITHUB_CLIENT_ID")
         .filter(|value| !value.trim().is_empty())

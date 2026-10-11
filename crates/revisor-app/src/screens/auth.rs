@@ -18,6 +18,7 @@ pub struct AuthScreen {
     show_pat: bool,
     pat: Entity<InputState>,
     pat_submitting: bool,
+    gh_submitting: bool,
     _login_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -49,6 +50,7 @@ impl AuthScreen {
             show_pat: false,
             pat,
             pat_submitting: false,
+            gh_submitting: false,
             _login_task: None,
             _subscriptions: subscriptions,
         }
@@ -120,6 +122,28 @@ impl AuthScreen {
             |s| async move { auth::validate_and_store_token(&s, token).await },
             |this, result, window, cx| {
                 this.pat_submitting = false;
+                match result {
+                    Ok(user) => this.signed_in(user, window, cx),
+                    Err(e) => this.error = Some(e.into()),
+                }
+            },
+        )
+        .detach();
+        cx.notify();
+    }
+
+    fn connect_with_gh_cli(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.gh_submitting {
+            return;
+        }
+        self.gh_submitting = true;
+        self.error = None;
+        backend::spawn(
+            window,
+            cx,
+            |s| async move { auth::sign_in_with_gh_cli(&s).await },
+            |this, result, window, cx| {
+                this.gh_submitting = false;
                 match result {
                     Ok(user) => this.signed_in(user, window, cx),
                     Err(e) => this.error = Some(e.into()),
@@ -265,6 +289,14 @@ impl Render for AuthScreen {
                         .label("Sign in with GitHub")
                         .loading(self.starting)
                         .on_click(cx.listener(|this, _, window, cx| this.begin_login(window, cx))),
+                )
+                .child(
+                    Button::new("use-gh")
+                        .ghost()
+                        .w_full()
+                        .label("Use GitHub CLI (gh) login")
+                        .loading(self.gh_submitting)
+                        .on_click(cx.listener(|this, _, window, cx| this.connect_with_gh_cli(window, cx))),
                 )
                 .child(
                     Button::new("use-pat")
