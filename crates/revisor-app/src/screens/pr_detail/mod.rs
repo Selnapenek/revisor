@@ -17,7 +17,9 @@ use gpui_kit::component::{
     resizable::{h_resizable, resizable_panel},
     spinner::Spinner,
     tab::{Tab, TabBar},
+    scroll::ScrollableElement as _,
     tag::Tag,
+    text::TextView,
     *,
 };
 use gpui_kit::{prelude::*, *};
@@ -29,6 +31,7 @@ actions!(pr_detail, [ToggleSearch, FocusFileFilter, ToggleConversations, PrevFil
 const CONTEXT: &str = "PrDetail";
 const SIDEBAR_WIDTH_KEY: &str = "sidebar-width";
 const SIDEBAR_DEFAULT: f32 = 260.;
+const DESCRIPTION_WIDTH: f32 = 340.;
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -52,6 +55,7 @@ pub struct PrDetailScreen {
     model: Entity<PrModel>,
     tab: SidebarTab,
     sidebar_width: Option<Pixels>,
+    description_open: bool,
     focus: FocusHandle,
     files: Entity<files::FilesPanel>,
     conversations: Entity<conversations::ConversationsPanel>,
@@ -84,6 +88,7 @@ impl PrDetailScreen {
             model,
             tab: SidebarTab::Files,
             sidebar_width: None,
+            description_open: true,
             focus,
             files,
             conversations,
@@ -141,6 +146,35 @@ impl PrDetailScreen {
                             .child(format!("{} · {}", pr.author_login, relative_time(&pr.updated_at))),
                     )
             }))
+            .child(div().flex_1())
+            .children(model.pr.as_ref().map(|pr| {
+                let has_body = pr.body.as_deref().is_some_and(|b| !b.trim().is_empty());
+                Button::new("description-toggle")
+                    .ghost()
+                    .small()
+                    .label(if has_body { "Description" } else { "No description" })
+                    .selected(has_body && self.description_open)
+                    .disabled(!has_body)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.description_open = !this.description_open;
+                        cx.notify();
+                    }))
+            }))
+    }
+
+    /// PR body for the right sidebar; `None` when the PR has no description.
+    fn description(&self, cx: &Context<Self>) -> Option<impl IntoElement> {
+        let body = self.model.read(cx).pr.as_ref()?.body.clone().filter(|b| !b.trim().is_empty())?;
+        Some(
+            v_flex()
+                .id("pr-description-panel")
+                .size_full()
+                .px_4()
+                .py_3()
+                .text_sm()
+                .child(TextView::markdown("pr-description", body))
+                .overflow_y_scrollbar(),
+        )
     }
 
     fn sidebar(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -178,6 +212,8 @@ impl PrDetailScreen {
 impl Render for PrDetailScreen {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let loading = self.model.read(cx).loading;
+        let description = self.description(cx);
+        let show_description = self.description_open && description.is_some();
         v_flex()
             .size_full()
             .key_context(CONTEXT)
@@ -204,9 +240,18 @@ impl Render for PrDetailScreen {
                             this.save_width(width, cx);
                         }
                     }))
-                    .child(resizable_panel().size(width).size_range(px(180.)..px(600.)).child(self.sidebar(cx)))
+                    // flex_none: sized side panels keep their width when the other one toggles.
+                    .child(resizable_panel().size(width).size_range(px(180.)..px(600.)).flex_none().child(self.sidebar(cx)))
                     // Opaque so code stays readable over the blurred window.
                     .child(resizable_panel().child(div().size_full().bg(cx.theme().colors.list).child(self.diff.clone())))
+                    .child(
+                        resizable_panel()
+                            .visible(show_description)
+                            .size(px(DESCRIPTION_WIDTH))
+                            .size_range(px(240.)..px(700.))
+                            .flex_none()
+                            .children(description),
+                    )
                     .into_any_element(),
                 _ => div().flex_1().flex().items_center().justify_center().child(Spinner::new()).into_any_element(),
             })
