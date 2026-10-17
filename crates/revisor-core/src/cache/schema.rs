@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 
-const CURRENT_VERSION: u32 = 1;
-
 pub fn run_migrations(conn: &mut Connection) -> Result<()> {
     // Create version table if not exists
     conn.execute_batch(
@@ -19,6 +17,9 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
 
     if version < 1 {
         migrate_v1(conn)?;
+    }
+    if version < 2 {
+        migrate_v2(conn)?;
     }
 
     Ok(())
@@ -104,5 +105,25 @@ fn migrate_v1(conn: &mut Connection) -> Result<()> {
     )?;
 
     tx.commit().context("Failed to commit v1 migration")?;
+    Ok(())
+}
+
+fn migrate_v2(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "
+        -- When the user last had a PR open; same format as GitHub's updated_at
+        CREATE TABLE IF NOT EXISTS pr_views (
+            owner       TEXT NOT NULL,
+            repo        TEXT NOT NULL,
+            pr_number   INTEGER NOT NULL,
+            viewed_at   TEXT NOT NULL,
+            PRIMARY KEY (owner, repo, pr_number)
+        );
+
+        INSERT OR REPLACE INTO schema_version (version) VALUES (2);
+        ",
+    )?;
+    tx.commit().context("Failed to commit v2 migration")?;
     Ok(())
 }

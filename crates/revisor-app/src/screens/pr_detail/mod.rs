@@ -152,6 +152,14 @@ pub struct PrDetailScreen {
     _width_load: Task<()>,
 }
 
+/// Record that the user saw this PR now; the PR list compares it with the PR's last update.
+fn mark_viewed(owner: String, repo: String, number: u64, cx: &App) {
+    let task = backend::call(cx, move |s| async move {
+        queries::mark_pr_viewed(s.cache.lock().await.conn(), &owner, &repo, number).map_err(backend::err)
+    });
+    cx.background_spawn(task).detach();
+}
+
 impl PrDetailScreen {
     pub fn new(
         owner: SharedString,
@@ -161,7 +169,8 @@ impl PrDetailScreen {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let model = cx.new(|cx| PrModel::new(owner, repo, number, viewer, cx));
+        mark_viewed(owner.to_string(), repo.to_string(), number, cx);
+        let model = cx.new(|cx| PrModel::new(owner.clone(), repo.clone(), number, viewer, cx));
         let files = cx.new(|cx| files::FilesPanel::new(model.clone(), window, cx));
         let conversations = cx.new(|cx| conversations::ConversationsPanel::new(model.clone(), window, cx));
         let semantic = cx.new(|cx| semantic::SemanticPanel::new(model.clone(), window, cx));
@@ -182,6 +191,8 @@ impl PrDetailScreen {
                 cx.observe(&model, |_, _, cx| cx.notify()),
                 // A focused input went away (search closed, comment sent or cancelled): keep the shortcuts working.
                 cx.on_focus_lost(window, |this, window, cx| this.focus.focus(window, cx)),
+                // Mark again on leave: activity made while the PR was open does not count as new.
+                cx.on_release(move |_, cx| mark_viewed(owner.to_string(), repo.to_string(), number, cx)),
             ],
             model,
             tab: SidebarTab::Files,

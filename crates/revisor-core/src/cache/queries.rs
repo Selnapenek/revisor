@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
+use std::collections::HashMap;
 
 // --- Settings ---
 
@@ -97,4 +98,25 @@ pub fn unmark_file_reviewed(
         params![owner, repo, pr_number as i64, file_path],
     )?;
     Ok(())
+}
+
+// --- PR Views ---
+
+pub fn mark_pr_viewed(conn: &Connection, owner: &str, repo: &str, pr_number: u64) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO pr_views (owner, repo, pr_number, viewed_at)
+         VALUES (?1, ?2, ?3, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+        params![owner, repo, pr_number as i64],
+    )?;
+    Ok(())
+}
+
+/// PR number to last view time, for one repo.
+pub fn get_pr_views(conn: &Connection, owner: &str, repo: &str) -> Result<HashMap<u64, String>> {
+    let mut stmt = conn.prepare("SELECT pr_number, viewed_at FROM pr_views WHERE owner = ?1 AND repo = ?2")?;
+    let rows = stmt
+        .query_map(params![owner, repo], |row| Ok((row.get::<_, i64>(0)? as u64, row.get(1)?)))?
+        .collect::<std::result::Result<_, _>>()
+        .context("Failed to read PR views")?;
+    Ok(rows)
 }

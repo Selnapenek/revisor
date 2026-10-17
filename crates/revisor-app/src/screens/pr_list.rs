@@ -17,10 +17,11 @@ use gpui_kit::component::{
     *,
 };
 use gpui_kit::{prelude::*, *};
+use revisor_core::cache::queries;
 use revisor_core::pr_filters::{self, REVIEW_REQUESTED_ME, REVIEW_STATUS_OPTIONS};
 use revisor_core::provider::types::{Label, PrSearchFilters, PrState, PrUser, PullRequest};
 use revisor_core::time::relative_time;
-use std::{ops::Range, time::Duration};
+use std::{collections::HashMap, ops::Range, time::Duration};
 
 const PER_PAGE: u32 = 30;
 const STATES: [PrState; 3] = [PrState::Open, PrState::Closed, PrState::All];
@@ -53,6 +54,8 @@ pub struct PrListScreen {
     label_search: Entity<InputState>,
     assignee_search: Entity<InputState>,
     prs: Vec<PullRequest>,
+    /// PR number to when the user last had it open.
+    views: HashMap<u64, String>,
     /// Indexes into `prs` matching the search, refreshed on render.
     visible: Vec<usize>,
     /// Number of the PR picked with the arrow keys; survives filtering and paging.
@@ -127,6 +130,7 @@ impl PrListScreen {
             label_search,
             assignee_search,
             prs: Vec::new(),
+            views: HashMap::new(),
             visible: Vec::new(),
             selected: None,
             focus,
@@ -154,17 +158,21 @@ impl PrListScreen {
             cx,
             move |s| async move {
                 let p = s.provider().await?;
-                if filters.is_empty() {
+                let result = if filters.is_empty() {
                     p.list_pull_requests(&owner, &repo, state, page, PER_PAGE).await
                 } else {
                     p.search_pull_requests(&owner, &repo, state, &filters, page, PER_PAGE).await
                 }
-                .map_err(backend::err)
+                .map_err(backend::err)?;
+                // Views are non-critical: on failure every PR shows as new.
+                let views = queries::get_pr_views(s.cache.lock().await.conn(), &owner, &repo).unwrap_or_default();
+                Ok((result, views))
             },
             move |this, result, window, cx| {
                 this.loading = false;
                 match result {
-                    Ok(result) => {
+                    Ok((result, views)) => {
+                        this.views = views;
                         pr_filters::merge_users(
                             &mut this.authors,
                             result.items.iter().map(|pr| PrUser {
@@ -422,6 +430,12 @@ impl PrListScreen {
                 let pr = &self.prs[ix];
                 let route = Route::PrDetail { owner: self.owner.clone(), repo: self.repo.clone(), number: pr.number };
                 let comments = pr.comments_count + pr.review_comments_count;
+                // Both timestamps are `YYYY-MM-DDTHH:MM:SSZ`, so string order is time order.
+                let freshness = match self.views.get(&pr.number) {
+                    None => Some(theme::stamp("New", theme.primary, theme)),
+                    Some(viewed) if pr.updated_at > *viewed => Some(theme::stamp("Updated", theme.warning, theme)),
+                    Some(_) => None,
+                };
                 let selected = self.selected == Some(pr.number);
                 h_flex()
                     .id(("pr", pr.number))
@@ -459,28 +473,50 @@ impl PrListScreen {
                                     .w_full()
                                     .gap_2()
                                     .child(div().flex_1().min_w_0().text_sm().font_medium().truncate().child(pr.title.clone()))
+                                    .children(freshness)
                                     .child(theme::pr_state_stamp(pr.merged_at.is_some(), &pr.state, pr.draft, cx)),
                             )
                             .child(
                                 h_flex()
+                                    .w_full()
                                     .gap_2()
-                                    .overflow_hidden()
                                     .text_xs()
                                     .text_color(theme.muted_foreground)
-                                    .child(theme::avatar(&pr.author_login, &pr.author_avatar))
-                                    .child(pr.author_login.clone())
-                                    .child("·")
-                                    .child(relative_time(&pr.updated_at))
-                                    .when(comments > 0, |el| {
-                                        el.child("·").child(format!("{comments} comment{}", if comments == 1 { "" } else { "s" }))
-                                    })
-                                    .children(pr.labels.iter().map(|l| {
-                                        let c = theme::hex(&l.color);
-                                        Tag::custom(c.opacity(0.15), c, c.opacity(0.4))
-                                            .small()
+                                    .child(
+                                        h_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .gap_2()
+                                            .overflow_hidden()
+                                            .child(theme::avatar(&pr.author_login, &pr.author_avatar))
+                                            .child(pr.author_login.clone())
+                                            .child("·")
+                                            .child(relative_time(&pr.updated_at))
+                                            .children(pr.labels.iter().map(|l| {
+                                                let c = theme::hex(&l.color);
+                                                Tag::custom(c.opacity(0.15), c, c.opacity(0.4))
+                                                    .small()
+                                                    .flex_shrink_0()
+                                                    .child(l.name.clone())
+                                            })),
+                                    )
+                                    .child(
+                                        h_flex()
                                             .flex_shrink_0()
-                                            .child(l.name.clone())
-                                    })),
+                                            .gap_2()
+                                            .when(comments > 0, |el| {
+                                                el.child(format!("{comments} comment{}", if comments == 1 { "" } else { "s" }))
+                                            })
+                                            .when(pr.additions + pr.deletions > 0, |el| {
+                                                el.child(
+                                                    h_flex()
+                                                        .gap_1()
+                                                        .font_family(theme.mono_font_family.clone())
+                                                        .child(div().text_color(theme.success).child(format!("+{}", pr.additions)))
+                                                        .child(div().text_color(theme.danger).child(format!("−{}", pr.deletions))),
+                                                )
+                                            }),
+                                    ),
                             ),
                     )
             })

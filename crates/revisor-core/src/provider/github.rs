@@ -248,6 +248,22 @@ impl GithubProvider {
             .ok_or_else(|| anyhow::anyhow!("GraphQL response missing 'data' field"))
     }
 
+    /// List and search endpoints leave out diff and comment counts: fetch them for the whole page in one
+    /// GraphQL query. Best effort: on failure the counts stay zero and the list still shows.
+    async fn fill_list_stats(&self, owner: &str, repo: &str, prs: &mut [PullRequest]) {
+        if prs.is_empty() {
+            return;
+        }
+        let fields: String = prs
+            .iter()
+            .map(|pr| format!("p{0}: pullRequest(number: {0}) {{ additions deletions changedFiles totalCommentsCount }} ", pr.number))
+            .collect();
+        let query = format!("query($owner: String!, $name: String!) {{ repository(owner: $owner, name: $name) {{ {fields}}} }}");
+        if let Ok(data) = self.graphql(&query, serde_json::json!({ "owner": owner, "name": repo })).await {
+            apply_list_stats(&data["repository"], prs);
+        }
+    }
+
     /// Check if response has a next page via Link header
     fn has_next_page(headers: &reqwest::header::HeaderMap) -> bool {
         headers
@@ -666,9 +682,11 @@ impl GitProvider for GithubProvider {
 
         let (items, has_next): (Vec<GhPullRequest>, bool) =
             self.get_with_pagination(&url).await?;
+        let mut items: Vec<PullRequest> = items.into_iter().map(Into::into).collect();
+        self.fill_list_stats(owner, repo, &mut items).await;
 
         Ok(PaginatedResult {
-            items: items.into_iter().map(Into::into).collect(),
+            items,
             page,
             has_next_page: has_next,
             total_count: None,
@@ -1077,9 +1095,11 @@ impl GitProvider for GithubProvider {
 
         let result: GhSearchResult2 = self.get(&url).await?;
         let has_next = (page as u64 * per_page as u64) < result.total_count;
+        let mut items: Vec<PullRequest> = result.items.into_iter().map(Into::into).collect();
+        self.fill_list_stats(owner, repo, &mut items).await;
 
         Ok(PaginatedResult {
-            items: result.items.into_iter().map(Into::into).collect(),
+            items,
             page,
             has_next_page: has_next,
             total_count: Some(result.total_count),
@@ -1366,6 +1386,21 @@ fn new_comment_body(params: &NewComment) -> serde_json::Value {
     body
 }
 
+/// Copy counts from the `fill_list_stats` response (`p<number>` aliases) into `prs`.
+/// `totalCommentsCount` already includes review comments.
+fn apply_list_stats(repository: &serde_json::Value, prs: &mut [PullRequest]) {
+    for pr in prs {
+        let node = &repository[format!("p{}", pr.number)];
+        let count = |key: &str| node[key].as_u64();
+        let Some(additions) = count("additions") else { continue };
+        pr.additions = additions;
+        pr.deletions = count("deletions").unwrap_or(0);
+        pr.changed_files = count("changedFiles").unwrap_or(0);
+        pr.comments_count = count("totalCommentsCount").unwrap_or(0);
+        pr.review_comments_count = 0;
+    }
+}
+
 /// Map a GraphQL `PullRequestReviewComment` node to `ReviewComment`.
 /// `side` comes from the request: the node has no plain side field.
 fn review_comment_from_graphql(node: &serde_json::Value, side: &str) -> Result<ReviewComment> {
@@ -1439,6 +1474,27 @@ mod tests {
         assert_eq!(c.author_login, "me");
         assert!(!c.outdated);
         assert!(review_comment_from_graphql(&serde_json::Value::Null, "RIGHT").is_err());
+    }
+
+    #[test]
+    fn apply_list_stats_fills_counts_by_alias() {
+        let pr = |number: u64| -> PullRequest {
+            let item: GhSearchIssueItem = serde_json::from_value(serde_json::json!({
+                "id": number, "number": number, "title": "t", "body": null, "state": "open", "draft": false,
+                "user": { "login": "me", "avatar_url": "" }, "labels": [], "assignees": [],
+                "created_at": "", "updated_at": "", "pull_request": null, "html_url": "",
+            }))
+            .unwrap();
+            item.into()
+        };
+        let mut prs = vec![pr(1), pr(2)];
+        let repository = serde_json::json!({
+            "p1": { "additions": 10, "deletions": 3, "changedFiles": 2, "totalCommentsCount": 5 },
+            "p2": null,
+        });
+        apply_list_stats(&repository, &mut prs);
+        assert_eq!((prs[0].additions, prs[0].deletions, prs[0].changed_files, prs[0].comments_count), (10, 3, 2, 5));
+        assert_eq!((prs[1].additions, prs[1].comments_count), (0, 0));
     }
 
     #[test]
