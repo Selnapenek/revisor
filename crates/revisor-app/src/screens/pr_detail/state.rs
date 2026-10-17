@@ -7,6 +7,7 @@ use revisor_core::diff::{diff_contents, fetch_pr_files, process_pr_files, search
 use revisor_core::provider::types::{
     Commit, IssueComment, PrReview, PullRequest, ReviewComment, ThreadResolutionInfo,
 };
+use revisor_core::provider::github::pr_load_error;
 use revisor_core::{cache::queries, diff::search, files};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -172,15 +173,19 @@ impl PrModel {
         let viewer = self.viewer.clone();
         let load = backend::call(cx, move |s| async move {
             let p = s.provider().await?;
-            let (pr, files, mut comments, issue_comments, mut reviews, resolutions, commits) = tokio::try_join!(
-                async { p.get_pull_request(&o, &r, number).await.map_err(backend::err) },
+            // join, not try_join: the PR's own error (missing, no access) explains the others.
+            let (pr, files, comments, issue_comments, reviews, resolutions, commits) = tokio::join!(
+                p.get_pull_request(&o, &r, number),
                 fetch_pr_files(&*p, &o, &r, number),
                 async { p.get_pr_comments(&o, &r, number).await.map_err(backend::err) },
                 async { p.get_issue_comments(&o, &r, number).await.map_err(backend::err) },
                 async { p.get_pr_reviews(&o, &r, number).await.map_err(backend::err) },
                 async { p.get_thread_resolutions(&o, &r, number).await.map_err(backend::err) },
                 async { p.get_pr_commits(&o, &r, number).await.map_err(backend::err) },
-            )?;
+            );
+            let pr = pr.map_err(|e| pr_load_error(&e, &o, &r, number))?;
+            let (files, mut comments, issue_comments, mut reviews, resolutions, commits) =
+                (files?, comments?, issue_comments?, reviews?, resolutions?, commits?);
             let pending = take_pending_review(&mut reviews, viewer.as_deref());
             if let Some(review) = &pending {
                 let extra = p.get_review_comments(&o, &r, number, review.id).await.map_err(backend::err)?;

@@ -6,6 +6,42 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
 
+/// Non-success HTTP status from the REST API; callers downcast it to explain the status.
+#[derive(Debug)]
+pub struct ApiError {
+    pub status: u16,
+    pub body: String,
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let reason = reqwest::StatusCode::from_u16(self.status).ok().and_then(|s| s.canonical_reason());
+        write!(f, "GitHub API error {} {}: {}", self.status, reason.unwrap_or(""), self.body)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+/// User-facing reason a pull request failed to load.
+pub fn pr_load_error(e: &anyhow::Error, owner: &str, repo: &str, number: u64) -> String {
+    let Some(api) = e.downcast_ref::<ApiError>() else { return e.to_string() };
+    match api.status {
+        404 => format!(
+            "{owner}/{repo}#{number} does not exist, or your GitHub account has no access to it. \
+             For a private repository, check that your sign-in has access."
+        ),
+        401 => "GitHub did not accept your sign-in. Sign out, then sign in again.".into(),
+        403 | 429 if api.body.to_lowercase().contains("rate limit") => {
+            "GitHub API rate limit exceeded. Try again later.".into()
+        }
+        403 => format!(
+            "GitHub refused access to {owner}/{repo}. The organization may require SSO authorization, \
+             or your token lacks the repo scope."
+        ),
+        _ => e.to_string(),
+    }
+}
+
 pub struct GithubProvider {
     client: Client,
     token: String,
@@ -45,9 +81,9 @@ impl GithubProvider {
         self.rate_limit.update_from_headers(response.headers());
 
         if !response.status().is_success() {
-            let status = response.status();
+            let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
-            bail!("GitHub API error {}: {}", status, body);
+            return Err(ApiError { status, body }.into());
         }
 
         response.json::<T>().await.context("Failed to parse response")
@@ -1401,5 +1437,18 @@ mod tests {
         assert_eq!(c.author_login, "me");
         assert!(!c.outdated);
         assert!(review_comment_from_graphql(&serde_json::Value::Null, "RIGHT").is_err());
+    }
+
+    #[test]
+    fn pr_load_error_words_status() {
+        let err = |status, body: &str| anyhow::Error::from(ApiError { status, body: body.into() });
+        let msg = |e: anyhow::Error| pr_load_error(&e, "o", "r", 7);
+        assert!(msg(err(404, "")).starts_with("o/r#7 does not exist"));
+        assert!(msg(err(401, "")).contains("did not accept your sign-in"));
+        assert!(msg(err(403, "API rate limit exceeded for user")).contains("rate limit exceeded"));
+        assert!(msg(err(429, "secondary rate limit")).contains("rate limit exceeded"));
+        assert!(msg(err(403, "Resource protected by SAML")).contains("refused access to o/r"));
+        assert_eq!(msg(err(500, "boom")), "GitHub API error 500 Internal Server Error: boom");
+        assert_eq!(msg(anyhow::anyhow!("Network request failed")), "Network request failed");
     }
 }

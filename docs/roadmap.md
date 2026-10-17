@@ -10,7 +10,7 @@ Last updated: 2026-10-17
 - **Current users:** Only the project owner, as last reported on 2026-10-11.
 - **Current stage:** Release 0 — prepare the first external trial.
 - **Next action:** R0-01 — verify installation and a complete review on a clean user setup. Record each obstacle before inviting trial users.
-- **Primary task in progress:** None. Select R0-01 when work starts.
+- **Primary task in progress:** R1-04 — pasted PR URL opening; manual app check pending.
 
 ## How to track progress
 
@@ -77,7 +77,7 @@ Recruitment and documentation can proceed while release-blocking defects are fix
 | R1-01 | Verify and complete keyboard movement between files, changed blocks, unreviewed files, and unresolved threads | Not started | Bindings exist in `e8516fa`; acceptance verification pending |
 | R1-02 | Add navigation history that returns to the prior file and line after search or comment jumps | Not started | Acceptance evidence not recorded |
 | R1-03 | Make shortcuts discoverable through visible help and control labels | Not started | Acceptance evidence not recorded |
-| R1-04 | Open a pasted GitHub PR URL with clear access, invalid-URL, and loading errors | Not started | Acceptance evidence not recorded |
+| R1-04 | Open a pasted GitHub PR URL with clear access, invalid-URL, and loading errors | In progress | 2026-10-17: URL parser and error-message unit tests pass; manual check in the app pending |
 | R1-05 | Verify and improve large-PR responsiveness while diffs load | Not started | On-demand loading exists in `3586142`; trial verification pending |
 
 ### Acceptance checklist

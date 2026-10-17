@@ -36,12 +36,12 @@ pub struct ReposScreen {
 
 impl ReposScreen {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let repo_input = cx.new(|cx| InputState::new(window, cx).placeholder("owner/repo or GitHub URL"));
+        let repo_input = cx.new(|cx| InputState::new(window, cx).placeholder("owner/repo, repository link, or pull request link"));
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search repositories..."));
         let subscriptions = vec![
             cx.subscribe_in(&repo_input, window, |this, _, event, window, cx| {
                 if let InputEvent::PressEnter { .. } = event {
-                    this.add_repo(window, cx);
+                    this.submit(window, cx);
                 }
             }),
             cx.subscribe_in(&search, window, |this, _, event, window, cx| {
@@ -123,16 +123,24 @@ impl ReposScreen {
         cx.notify();
     }
 
-    fn add_repo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Save a repo, or open a pull request link without saving (access is unknown until it loads).
+    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let value = self.repo_input.read(cx).value();
-        let Some((owner, repo)) = parse_repo(value.trim()) else {
-            self.input_error = Some("Enter as owner/repo (e.g. facebook/react)".into());
-            cx.notify();
-            return;
-        };
-        self.input_error = None;
-        self.save(owner.to_string(), repo.to_string(), false, window, cx);
-        self.repo_input.update(cx, |input, cx| input.set_value("", window, cx));
+        match parse_target(value.trim()) {
+            Err(e) => {
+                self.input_error = Some(e.into());
+                cx.notify();
+            }
+            Ok(Target::Pr(owner, repo, number)) => {
+                let route = Route::PrDetail { owner: owner.to_string().into(), repo: repo.to_string().into(), number };
+                app::navigate(route, window, cx);
+            }
+            Ok(Target::Repo(owner, repo)) => {
+                self.input_error = None;
+                self.save(owner.to_string(), repo.to_string(), false, window, cx);
+                self.repo_input.update(cx, |input, cx| input.set_value("", window, cx));
+            }
+        }
     }
 
     /// Save (or bump) a repo, move it to the top of the saved list, and optionally open it.
@@ -179,6 +187,7 @@ impl ReposScreen {
     }
 
     fn render_saved(&self, cx: &mut Context<Self>) -> Div {
+        let is_pr = matches!(parse_target(self.repo_input.read(cx).value().trim()), Ok(Target::Pr(..)));
         let theme = cx.theme();
         let list = if self.saved.is_empty() {
             v_flex()
@@ -225,8 +234,8 @@ impl ReposScreen {
                     .child(
                         Button::new("add-repo")
                             .primary()
-                            .label("Add")
-                            .on_click(cx.listener(|this, _, window, cx| this.add_repo(window, cx))),
+                            .label(if is_pr { "Open" } else { "Add" })
+                            .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx))),
                     ),
             )
             .child(list)
@@ -357,36 +366,80 @@ fn repo_name(owner: &str, repo: &str, cx: &App) -> Div {
         .child(div().ml_1().font_medium().truncate().child(repo.to_string()))
 }
 
-/// Parse `owner/repo` or `https://github.com/owner/repo[/]`.
-/// Port of `/^(?:https?:\/\/github\.com\/)?([^/\s]+)\/([^/\s]+?)\/?$/`.
-fn parse_repo(value: &str) -> Option<(&str, &str)> {
-    let rest = ["https://github.com/", "http://github.com/"]
-        .iter()
-        .find_map(|p| value.strip_prefix(p))
-        .unwrap_or(value);
-    let rest = rest.strip_suffix('/').unwrap_or(rest);
-    let (owner, repo) = rest.split_once('/')?;
-    let ok = |s: &str| !s.is_empty() && !s.contains(|c: char| c == '/' || c.is_whitespace());
-    (ok(owner) && ok(repo)).then_some((owner, repo))
+#[derive(Debug, PartialEq)]
+enum Target<'a> {
+    Repo(&'a str, &'a str),
+    Pr(&'a str, &'a str, u64),
+}
+
+const BAD_INPUT: &str = "Enter owner/repo, a repository link, or a pull request link";
+const BAD_PR: &str = "Not a valid pull request link, e.g. https://github.com/owner/repo/pull/123";
+
+/// Parse `owner/repo`, `owner/repo#123`, or a github.com repository or pull request link
+/// (`…/pull/123/files?w=1#diff` too).
+fn parse_target(value: &str) -> Result<Target<'_>, &'static str> {
+    let unschemed = value.strip_prefix("https://").or_else(|| value.strip_prefix("http://"));
+    let rest = unschemed.unwrap_or(value);
+    let rest = rest.strip_prefix("www.").unwrap_or(rest);
+    // GitHub owners have no dots, so a dotted first segment is a host.
+    let (path, is_link) = match rest.split_once('/').unwrap_or((rest, "")) {
+        ("github.com", path) => (path, true),
+        (first, _) if unschemed.is_some() || first.contains('.') => return Err("Only github.com links are supported"),
+        _ => (rest, false),
+    };
+    let (path, fragment) = path.split_once('#').map_or((path, None), |(p, f)| (p, Some(f)));
+    let path = path.split_once('?').map_or(path, |(p, _)| p);
+    let path = path.strip_suffix('/').unwrap_or(path);
+    let parts: Vec<&str> = path.split('/').collect();
+    let ok = |s: &str| !s.is_empty() && !s.contains(char::is_whitespace);
+    let number = |n: &str| n.parse::<u64>().ok().filter(|&n| n > 0).ok_or(BAD_PR);
+    match parts[..] {
+        [owner, repo, ref rest @ ..] if ok(owner) && ok(repo) => match (rest, fragment) {
+            ([], Some(n)) if !is_link => Ok(Target::Pr(owner, repo, number(n)?)),
+            ([], _) => Ok(Target::Repo(owner, repo)),
+            (["pull", n, ..], _) => Ok(Target::Pr(owner, repo, number(n)?)),
+            (["pull"], _) => Err(BAD_PR),
+            _ => Err(BAD_INPUT),
+        },
+        _ => Err(BAD_INPUT),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_repo;
+    use super::{parse_target, Target::*, BAD_INPUT, BAD_PR};
 
     #[test]
     fn parses_repo_input() {
-        assert_eq!(parse_repo("facebook/react"), Some(("facebook", "react")));
-        assert_eq!(parse_repo("facebook/react/"), Some(("facebook", "react")));
-        assert_eq!(parse_repo("https://github.com/facebook/react"), Some(("facebook", "react")));
-        assert_eq!(parse_repo("http://github.com/facebook/react/"), Some(("facebook", "react")));
-        assert_eq!(parse_repo("facebook"), None);
-        assert_eq!(parse_repo("facebook/react//"), None);
-        assert_eq!(parse_repo("a/b/c"), None);
-        assert_eq!(parse_repo("https://github.com/facebook"), None);
-        assert_eq!(parse_repo("https://github.com/facebook/react/pulls"), None);
-        assert_eq!(parse_repo("face book/react"), None);
-        assert_eq!(parse_repo("/react"), None);
-        assert_eq!(parse_repo(""), None);
+        assert_eq!(parse_target("facebook/react"), Ok(Repo("facebook", "react")));
+        assert_eq!(parse_target("facebook/react/"), Ok(Repo("facebook", "react")));
+        assert_eq!(parse_target("https://github.com/facebook/react"), Ok(Repo("facebook", "react")));
+        assert_eq!(parse_target("http://github.com/facebook/react/"), Ok(Repo("facebook", "react")));
+        assert_eq!(parse_target("https://www.github.com/facebook/react#readme"), Ok(Repo("facebook", "react")));
+        assert_eq!(parse_target("github.com/facebook/react"), Ok(Repo("facebook", "react")));
+        for bad in ["facebook", "facebook/react//", "a/b/c", "https://github.com/facebook", "https://github.com/facebook/react/pulls", "face book/react", "/react", ""] {
+            assert_eq!(parse_target(bad), Err(BAD_INPUT), "{bad}");
+        }
+    }
+
+    #[test]
+    fn parses_pull_request_input() {
+        for good in [
+            "https://github.com/facebook/react/pull/123",
+            "https://github.com/facebook/react/pull/123/",
+            "https://github.com/facebook/react/pull/123/files?w=1#diff-abc",
+            "https://github.com/facebook/react/pull/123/commits/abc123",
+            "github.com/facebook/react/pull/123",
+            "facebook/react/pull/123",
+            "facebook/react#123",
+        ] {
+            assert_eq!(parse_target(good), Ok(Pr("facebook", "react", 123)), "{good}");
+        }
+        for bad in ["https://github.com/facebook/react/pull", "https://github.com/facebook/react/pull/abc", "facebook/react/pull/0", "facebook/react#x"] {
+            assert_eq!(parse_target(bad), Err(BAD_PR), "{bad}");
+        }
+        for other in ["https://gitlab.com/a/b/-/merge_requests/1", "https://example.com/a/b", "gitlab.com/a/b"] {
+            assert_eq!(parse_target(other), Err("Only github.com links are supported"), "{other}");
+        }
     }
 }

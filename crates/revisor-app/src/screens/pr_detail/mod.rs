@@ -319,14 +319,14 @@ impl PrDetailScreen {
 
     /// Shown instead of the split when the PR failed to load.
     fn load_error(&self, error: SharedString, cx: &Context<Self>) -> impl IntoElement {
-        let number = self.model.read(cx).number;
+        let name = pr_name(self.model.read(cx));
         div().flex_1().flex().items_center().justify_center().child(
             v_flex()
                 .items_center()
                 .gap_2()
                 .max_w(px(480.))
                 .text_sm()
-                .child(div().font_family(cx.theme().mono_font_family.clone()).text_2xl().child(format!("Couldn't load pull request #{number}")))
+                .child(div().font_family(cx.theme().mono_font_family.clone()).text_2xl().child(format!("Couldn't load {name}")))
                 .child(div().text_xs().text_center().text_color(cx.theme().muted_foreground).child(error))
                 .child(
                     h_flex()
@@ -456,7 +456,21 @@ impl Render for PrDetailScreen {
                             })),
                     )
                     ).into_any_element(),
-                _ => div().flex_1().flex().items_center().justify_center().child(Spinner::new()).into_any_element(),
+                _ => h_flex()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .gap_2()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(Spinner::new())
+                    .child(format!("Loading {}…", pr_name(self.model.read(cx))))
+                    .into_any_element(),
             })
     }
+}
+
+/// `owner/repo#123`.
+fn pr_name(model: &PrModel) -> String {
+    format!("{}/{}#{}", model.owner, model.repo, model.number)
 }
