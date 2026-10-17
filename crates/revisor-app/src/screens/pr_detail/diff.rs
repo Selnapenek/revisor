@@ -2,7 +2,7 @@
 
 use super::code_text::CodeText;
 use super::comments::{save_comment, save_with, CommentForm, CommentFormEvent, ThreadView};
-use super::state::{CommitSelection, DiffMode, PrEvent, PrModel, ScrollTarget};
+use super::state::{CommitSelection, DiffMode, PrEvent, PrModel, ScrollTarget, Spot};
 use super::syntax::FileSyntax;
 use crate::{backend, theme};
 use gpui_kit::component::{
@@ -142,7 +142,15 @@ impl DiffView {
         let subscriptions = vec![
             cx.observe_in(&model, window, |this, _, window, cx| this.sync(window, cx)),
             cx.subscribe_in(&model, window, |this, _, event: &PrEvent, window, cx| {
-                let PrEvent::ScrollTo(target) = event else { return };
+                let target = match event {
+                    PrEvent::ScrollTo(target) => target,
+                    PrEvent::JumpTo(target) => {
+                        // Rows are not rebuilt yet, so this is where the user was.
+                        this.record(cx);
+                        target
+                    }
+                    PrEvent::SelectedFromScroll => return,
+                };
                 this.sync(window, cx);
                 this.scroll_to(target, cx);
             }),
@@ -367,6 +375,43 @@ impl DiffView {
         cx.notify();
     }
 
+    /// Diff line a row shows, preferring the new side. Unified rows use their own anchor.
+    fn row_anchor(&self, model: &PrModel, row: Row) -> Option<(Side, u64)> {
+        match (row, self.row_lines(model, row)) {
+            (Row::Unified(..), [Some(l), _]) => {
+                let (side, line) = unified_anchor(l);
+                Some((side, line?))
+            }
+            (_, [left, right]) => right
+                .and_then(|l| Some((Side::Right, l.new_lineno?)))
+                .or_else(|| left.and_then(|l| Some((Side::Left, l.old_lineno?)))),
+        }
+    }
+
+    /// The current position: the first line of the top file in view, or its header.
+    fn current_spot(&self, cx: &App) -> Option<Spot> {
+        let model = self.model.read(cx);
+        let top = self.list.logical_scroll_top().item_ix;
+        let fi = self.rows.get(top)?.file();
+        let path = model.files.get(fi)?.filename.clone();
+        let line = self.rows[top..]
+            .iter()
+            .take_while(|r| r.file() == fi)
+            .enumerate()
+            .find_map(|(above, &r)| Some((above, self.row_anchor(model, r)?)));
+        Some(match line {
+            Some((above, line)) => Spot { path, line: Some(line), above },
+            None => Spot { path, line: None, above: 0 },
+        })
+    }
+
+    /// Add the current position to the navigation history.
+    fn record(&mut self, cx: &mut Context<Self>) {
+        if let Some(spot) = self.current_spot(cx) {
+            self.model.update(cx, |m, cx| m.push_history(spot, cx));
+        }
+    }
+
     /// Row a keyboard step starts from: the last target while the list has not moved
     /// away from it, otherwise the top visible row.
     fn nav_from(&self) -> usize {
@@ -433,7 +478,10 @@ impl DiffView {
                     self.model.update(cx, |m, cx| m.open(&path, ScrollTarget::Thread(id), cx));
                 }
             }
-            _ => self.scroll_to_row(ix, SCROLL_CONTEXT, cx),
+            _ => {
+                self.record(cx);
+                self.scroll_to_row(ix, SCROLL_CONTEXT, cx);
+            }
         }
     }
 
@@ -449,6 +497,18 @@ impl DiffView {
                 r.file() == fi && self.row_lines(model, r).iter().flatten().any(|l| hit(r, l))
             })
         };
+        let anchor_row = |path: &str, side: Side, line: u64| {
+            let fi = model.files.iter().position(|f| f.filename == path)?;
+            let hit = |r: Row, l: &DiffLine| {
+                let anchor = match r {
+                    Row::Unified(..) => unified_anchor(l),
+                    _ if side == Side::Left => (Side::Left, l.old_lineno),
+                    _ => (Side::Right, l.new_lineno),
+                };
+                anchor == (side, Some(line))
+            };
+            line_row(fi, &hit)
+        };
         match target {
             ScrollTarget::File(path) => file_row(path),
             ScrollTarget::Thread(id) => {
@@ -459,17 +519,12 @@ impl DiffView {
                 })
             }
             ScrollTarget::Line { path, side, line } => {
-                let fi = model.files.iter().position(|f| &f.filename == path)?;
-                let hit = |r: Row, l: &DiffLine| {
-                    let anchor = match r {
-                        Row::Unified(..) => unified_anchor(l),
-                        _ if *side == Side::Left => (Side::Left, l.old_lineno),
-                        _ => (Side::Right, l.new_lineno),
-                    };
-                    anchor == (*side, Some(*line))
-                };
-                line_row(fi, &hit).map(|ix| (ix, SCROLL_CONTEXT)).or_else(|| file_row(path))
+                anchor_row(path, *side, *line).map(|ix| (ix, SCROLL_CONTEXT)).or_else(|| file_row(path))
             }
+            ScrollTarget::Spot(Spot { path, line, above }) => line
+                .and_then(|(side, line)| anchor_row(path, side, line))
+                .map(|ix| (ix, *above))
+                .or_else(|| file_row(path)),
             ScrollTarget::Match => {
                 let m = model.active_match()?;
                 let fi = model.visible[m.file];
@@ -997,6 +1052,21 @@ impl DiffView {
             )
             .when(model.files_loading, |el| el.child(Spinner::new().xsmall()))
             .child(div().flex_1())
+            .children(model.history.last().map(|spot| {
+                let place = match spot.line {
+                    Some((_, line)) => format!("{}:{line}", spot.path),
+                    None => spot.path.clone(),
+                };
+                Button::new("history-back")
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::ChevronLeft)
+                    .label("Back")
+                    .tooltip(format!("Back to {place} (⌘[)"))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.model.update(cx, |m, cx| m.go_back(cx));
+                    }))
+            }))
             .child(
                 Button::new("search-toggle")
                     .ghost()

@@ -33,10 +33,25 @@ pub enum ScrollTarget {
     Line { path: String, side: Side, line: u64 },
     /// The active code search match.
     Match,
+    /// A position recorded in the navigation history.
+    Spot(Spot),
 }
+
+/// A diff position to go back to: a line (`None` = the file header) and how many rows showed above it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Spot {
+    pub path: String,
+    pub line: Option<(Side, u64)>,
+    pub above: usize,
+}
+
+/// Navigation history entries kept; older ones drop.
+const HISTORY_MAX: usize = 50;
 
 pub enum PrEvent {
     ScrollTo(ScrollTarget),
+    /// Like `ScrollTo`, but the diff view records where it was first, for Back.
+    JumpTo(ScrollTarget),
     /// `selected` followed the diff scroll position. Not a `notify`, so views that only
     /// depend on rows skip their rebuild while the user scrolls.
     SelectedFromScroll,
@@ -47,6 +62,8 @@ pub struct CodeSearch {
     /// Matches in the visible files; `CodeMatch::file` indexes `PrModel::visible`.
     pub matches: Vec<CodeMatch>,
     pub active: usize,
+    /// A match was jumped to; later steps of this search add no history.
+    jumped: bool,
 }
 
 pub struct PrModel {
@@ -83,6 +100,8 @@ pub struct PrModel {
     pub include: String,
     pub exclude: String,
     pub search: Option<CodeSearch>,
+    /// Positions before search and comment jumps, newest last.
+    pub history: Vec<Spot>,
     file_lines: HashMap<(String, String), Arc<Vec<String>>>,
     file_lines_pending: HashSet<(String, String)>,
     /// Large files whose diff is being loaded on demand.
@@ -134,6 +153,7 @@ impl PrModel {
             include: String::new(),
             exclude: String::new(),
             search: None,
+            history: vec![],
             file_lines: HashMap::new(),
             file_lines_pending: HashSet::new(),
             diff_loading: HashSet::new(),
@@ -202,6 +222,8 @@ impl PrModel {
 
     fn set_files(&mut self, files: Vec<ProcessedFile>, cx: &mut Context<Self>) {
         self.selected = files.first().map(|f| f.filename.clone());
+        // Recorded rows belong to the old file set.
+        self.history.clear();
         self.files = files;
         self.refilter(cx);
     }
@@ -287,18 +309,44 @@ impl PrModel {
 
     /// Clear sidebar filters, open the target's file and scroll to it.
     pub fn reveal(&mut self, path: &str, target: ScrollTarget, cx: &mut Context<Self>) {
+        // Open first: its jump event must reach the diff before the refilter rebuilds the rows.
+        self.open(path, target, cx);
         if !(self.filter_query.is_empty() && self.include.is_empty() && self.exclude.is_empty()) {
             self.set_filter(String::new(), String::new(), String::new(), cx);
         }
-        self.open(path, target, cx);
     }
 
     /// Select and expand `path`, then scroll to `target` in it.
     pub fn open(&mut self, path: &str, target: ScrollTarget, cx: &mut Context<Self>) {
         self.selected = Some(path.to_string());
         self.collapsed.remove(path);
-        cx.emit(PrEvent::ScrollTo(target));
+        cx.emit(PrEvent::JumpTo(target));
         cx.notify();
+    }
+
+    /// Add `spot` to the navigation history.
+    pub fn push_history(&mut self, spot: Spot, cx: &mut Context<Self>) {
+        if self.history.last() != Some(&spot) {
+            if self.history.len() == HISTORY_MAX {
+                self.history.remove(0);
+            }
+            self.history.push(spot);
+            cx.notify();
+        }
+    }
+
+    /// Return to the last recorded position. `false` when the history is empty.
+    pub fn go_back(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(spot) = self.history.pop() else { return false };
+        let path = spot.path.clone();
+        if !self.visible.iter().any(|&i| self.files[i].filename == path) {
+            self.set_filter(String::new(), String::new(), String::new(), cx);
+        }
+        self.selected = Some(path.clone());
+        self.collapsed.remove(&path);
+        cx.emit(PrEvent::ScrollTo(ScrollTarget::Spot(spot)));
+        cx.notify();
+        true
     }
 
     /// Diff scroll position moved into `path`; only updates the sidebar highlight.
@@ -457,7 +505,7 @@ impl PrModel {
 
     pub fn open_search(&mut self, cx: &mut Context<Self>) {
         if self.search.is_none() {
-            self.search = Some(CodeSearch { query: String::new(), matches: vec![], active: 0 });
+            self.search = Some(CodeSearch { query: String::new(), matches: vec![], active: 0, jumped: false });
             cx.notify();
         }
     }
@@ -498,13 +546,15 @@ impl PrModel {
         s.active = s.active.min(s.matches.len().saturating_sub(1));
     }
 
+    /// Scroll to the active match. Only the first jump of a search is recorded, so Back returns to where it started.
     fn reveal_match(&mut self, cx: &mut Context<Self>) {
-        if let Some(m) = self.active_match() {
-            let path = self.visible_file(m.file).filename.clone();
-            self.collapsed.remove(&path);
-            self.selected = Some(path);
-            cx.emit(PrEvent::ScrollTo(ScrollTarget::Match));
-        }
+        let Some(m) = self.active_match() else { return };
+        let path = self.visible_file(m.file).filename.clone();
+        self.collapsed.remove(&path);
+        self.selected = Some(path);
+        let Some(s) = &mut self.search else { return };
+        let first = !std::mem::replace(&mut s.jumped, true);
+        cx.emit(if first { PrEvent::JumpTo(ScrollTarget::Match) } else { PrEvent::ScrollTo(ScrollTarget::Match) });
     }
 
     // --- File content (expand context, AI features) ---

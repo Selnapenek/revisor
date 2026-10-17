@@ -160,7 +160,7 @@ impl PrDetailScreen {
                     .ghost()
                     .small()
                     .label("← PRs")
-                    .tooltip("Back (⌘[)")
+                    .tooltip("Back to pull requests")
                     .on_click(|_, window, cx| app::go_back(window, cx)),
             )
             .child(Button::new("sidebar-toggle").ghost().small().label("Sidebar").selected(self.sidebar_open).on_click(
@@ -345,6 +345,12 @@ impl Render for PrDetailScreen {
             .on_action(cx.listener(|this, _: &PrevThread, _, cx| this.diff.update(cx, |d, cx| d.step_thread(false, cx))))
             .on_action(cx.listener(|this, _: &NextUnreviewed, _, cx| this.model.update(cx, |m, cx| m.navigate_unreviewed(true, cx))))
             .on_action(cx.listener(|this, _: &PrevUnreviewed, _, cx| this.model.update(cx, |m, cx| m.navigate_unreviewed(false, cx))))
+            // ⌘[ goes back in the diff first; with no history the global handler leaves the PR.
+            .on_action(cx.listener(|this, _: &app::GoBack, _, cx| {
+                if !this.model.update(cx, |m, cx| m.go_back(cx)) {
+                    cx.propagate();
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToggleViewed, _, cx| this.model.update(cx, |m, cx| m.toggle_selected_reviewed(cx))))
             .on_action(cx.listener(|this, _: &ToggleConversations, _, cx| {
                 this.tab = if this.tab == SidebarTab::Files { SidebarTab::Conversations } else { SidebarTab::Files };
