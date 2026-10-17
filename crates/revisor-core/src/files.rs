@@ -237,6 +237,20 @@ pub fn navigate_file(len: usize, current: Option<usize>, direction: isize) -> Op
     Some((idx + direction).rem_euclid(len as isize) as usize)
 }
 
+/// Next (`forward`) or previous index in `0..len` where `hit` is true, wrapping around.
+/// Searches from `current` (excluded), or from the start/end when `None`. `current` is returned
+/// only when it is the sole hit.
+pub fn find_wrapping(len: usize, current: Option<usize>, forward: bool, hit: impl Fn(usize) -> bool) -> Option<usize> {
+    let start = match (current, forward) {
+        (Some(c), _) => c.min(len.saturating_sub(1)),
+        (None, true) => len.saturating_sub(1),
+        (None, false) => 0,
+    };
+    (1..=len)
+        .map(|step| if forward { (start + step) % len } else { (start + len - step % len) % len })
+        .find(|&i| hit(i))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,5 +398,23 @@ mod tests {
         // Same as TS: prev with no selection lands on (len - 2).
         assert_eq!(navigate_file(3, None, -1), Some(1));
         assert_eq!(navigate_file(1, None, -1), Some(0));
+    }
+
+    #[test]
+    fn find_wrapping_steps_and_wraps() {
+        let hits = [false, true, false, true, false];
+        let hit = |i: usize| hits[i];
+        assert_eq!(find_wrapping(5, Some(1), true, hit), Some(3));
+        assert_eq!(find_wrapping(5, Some(3), true, hit), Some(1));
+        assert_eq!(find_wrapping(5, Some(3), false, hit), Some(1));
+        assert_eq!(find_wrapping(5, Some(1), false, hit), Some(3));
+        assert_eq!(find_wrapping(5, Some(2), true, hit), Some(3));
+        assert_eq!(find_wrapping(5, None, true, hit), Some(1));
+        assert_eq!(find_wrapping(5, None, false, hit), Some(3));
+        // The only hit: stay on it.
+        assert_eq!(find_wrapping(3, Some(1), true, |i| i == 1), Some(1));
+        assert_eq!(find_wrapping(3, Some(0), true, |_| false), None);
+        assert_eq!(find_wrapping(0, None, true, |_| true), None);
+        assert_eq!(find_wrapping(0, Some(4), false, |_| true), None);
     }
 }

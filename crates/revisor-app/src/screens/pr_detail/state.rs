@@ -282,10 +282,7 @@ impl PrModel {
 
     /// Select `path` in the sidebar and scroll the diff to it.
     pub fn select_file(&mut self, path: &str, cx: &mut Context<Self>) {
-        self.selected = Some(path.to_string());
-        self.collapsed.remove(path);
-        cx.emit(PrEvent::ScrollTo(ScrollTarget::File(path.to_string())));
-        cx.notify();
+        self.open(path, ScrollTarget::File(path.to_string()), cx);
     }
 
     /// Clear sidebar filters, open the target's file and scroll to it.
@@ -293,6 +290,11 @@ impl PrModel {
         if !(self.filter_query.is_empty() && self.include.is_empty() && self.exclude.is_empty()) {
             self.set_filter(String::new(), String::new(), String::new(), cx);
         }
+        self.open(path, target, cx);
+    }
+
+    /// Select and expand `path`, then scroll to `target` in it.
+    pub fn open(&mut self, path: &str, target: ScrollTarget, cx: &mut Context<Self>) {
         self.selected = Some(path.to_string());
         self.collapsed.remove(path);
         cx.emit(PrEvent::ScrollTo(target));
@@ -307,15 +309,37 @@ impl PrModel {
         }
     }
 
+    /// Position of the selected file in `visible`.
+    fn selected_visible(&self) -> Option<usize> {
+        let path = self.selected.as_ref()?;
+        self.visible.iter().position(|&i| &self.files[i].filename == path)
+    }
+
     /// Step to the previous (-1) or next (1) visible file.
     pub fn navigate_file(&mut self, direction: isize, cx: &mut Context<Self>) {
-        let current = self
-            .selected
-            .as_ref()
-            .and_then(|p| self.visible.iter().position(|&i| &self.files[i].filename == p));
+        let current = self.selected_visible();
         if let Some(next) = files::navigate_file(self.visible.len(), current, direction) {
             let path = self.visible_file(next).filename.clone();
             self.select_file(&path, cx);
+        }
+    }
+
+    /// Step to the next or previous visible file not marked viewed.
+    pub fn navigate_unreviewed(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let current = self.selected_visible();
+        let unreviewed = |i: usize| !self.reviewed.contains(&self.visible_file(i).filename);
+        if let Some(next) = files::find_wrapping(self.visible.len(), current, forward, unreviewed) {
+            let path = self.visible_file(next).filename.clone();
+            self.select_file(&path, cx);
+        }
+    }
+
+    /// Toggle viewed on the selected file. A newly viewed file collapses; pin its header so the next file follows.
+    pub fn toggle_selected_reviewed(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.selected.clone() else { return };
+        self.toggle_reviewed(&path, cx);
+        if self.reviewed.contains(&path) {
+            cx.emit(PrEvent::ScrollTo(ScrollTarget::File(path)));
         }
     }
 

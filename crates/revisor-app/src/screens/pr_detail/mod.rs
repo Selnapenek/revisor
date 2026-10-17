@@ -28,9 +28,28 @@ use revisor_core::{cache::queries, time::relative_time};
 use state::PrModel;
 use std::rc::Rc;
 
-actions!(pr_detail, [ToggleSearch, FocusFileFilter, ToggleConversations, PrevFile, NextFile, CloseSearch]);
+actions!(
+    pr_detail,
+    [
+        ToggleSearch,
+        FocusFileFilter,
+        ToggleConversations,
+        PrevFile,
+        NextFile,
+        CloseSearch,
+        NextChange,
+        PrevChange,
+        NextThread,
+        PrevThread,
+        NextUnreviewed,
+        PrevUnreviewed,
+        ToggleViewed,
+    ]
+);
 
 const CONTEXT: &str = "PrDetail";
+/// Letter keys must not fire while typing in an input.
+const NOT_TYPING: &str = "PrDetail && !Input";
 const SIDEBAR_WIDTH_KEY: &str = "sidebar-width";
 const SIDEBAR_DEFAULT: f32 = 260.;
 const DESCRIPTION_WIDTH: f32 = 340.;
@@ -44,6 +63,13 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("left", PrevFile, Some(CONTEXT)),
         KeyBinding::new("right", NextFile, Some(CONTEXT)),
         KeyBinding::new("escape", CloseSearch, Some(CONTEXT)),
+        KeyBinding::new("j", NextChange, Some(NOT_TYPING)),
+        KeyBinding::new("k", PrevChange, Some(NOT_TYPING)),
+        KeyBinding::new("n", NextThread, Some(NOT_TYPING)),
+        KeyBinding::new("shift-n", PrevThread, Some(NOT_TYPING)),
+        KeyBinding::new("u", NextUnreviewed, Some(NOT_TYPING)),
+        KeyBinding::new("shift-u", PrevUnreviewed, Some(NOT_TYPING)),
+        KeyBinding::new("v", ToggleViewed, Some(NOT_TYPING)),
     ]);
 }
 
@@ -95,7 +121,11 @@ impl PrDetailScreen {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         Self {
-            _subscriptions: vec![cx.observe(&model, |_, _, cx| cx.notify())],
+            _subscriptions: vec![
+                cx.observe(&model, |_, _, cx| cx.notify()),
+                // A focused input went away (search closed, comment sent or cancelled): keep the shortcuts working.
+                cx.on_focus_lost(window, |this, window, cx| this.focus.focus(window, cx)),
+            ],
             model,
             tab: SidebarTab::Files,
             sidebar_width: None,
@@ -309,6 +339,13 @@ impl Render for PrDetailScreen {
             .on_action(cx.listener(|this, _: &CloseSearch, _, cx| this.model.update(cx, |m, cx| m.close_search(cx))))
             .on_action(cx.listener(|this, _: &PrevFile, _, cx| this.model.update(cx, |m, cx| m.navigate_file(-1, cx))))
             .on_action(cx.listener(|this, _: &NextFile, _, cx| this.model.update(cx, |m, cx| m.navigate_file(1, cx))))
+            .on_action(cx.listener(|this, _: &NextChange, _, cx| this.diff.update(cx, |d, cx| d.step_change(true, cx))))
+            .on_action(cx.listener(|this, _: &PrevChange, _, cx| this.diff.update(cx, |d, cx| d.step_change(false, cx))))
+            .on_action(cx.listener(|this, _: &NextThread, _, cx| this.diff.update(cx, |d, cx| d.step_thread(true, cx))))
+            .on_action(cx.listener(|this, _: &PrevThread, _, cx| this.diff.update(cx, |d, cx| d.step_thread(false, cx))))
+            .on_action(cx.listener(|this, _: &NextUnreviewed, _, cx| this.model.update(cx, |m, cx| m.navigate_unreviewed(true, cx))))
+            .on_action(cx.listener(|this, _: &PrevUnreviewed, _, cx| this.model.update(cx, |m, cx| m.navigate_unreviewed(false, cx))))
+            .on_action(cx.listener(|this, _: &ToggleViewed, _, cx| this.model.update(cx, |m, cx| m.toggle_selected_reviewed(cx))))
             .on_action(cx.listener(|this, _: &ToggleConversations, _, cx| {
                 this.tab = if this.tab == SidebarTab::Files { SidebarTab::Conversations } else { SidebarTab::Files };
                 this.sidebar_open = true;

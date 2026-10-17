@@ -24,6 +24,7 @@ use revisor_core::diff::side_by_side::{to_side_by_side, SideBySideRow};
 use revisor_core::diff::word_diff::{WordDiffKind, WordDiffSpan};
 use revisor_core::diff::ProcessedDiff;
 use revisor_core::provider::types::NewComment;
+use revisor_core::files::find_wrapping;
 use std::collections::HashMap;
 use std::ops::Range;
 
@@ -125,6 +126,8 @@ pub struct DiffView {
     files_key: (CommitSelection, bool),
     search_open: bool,
     search: Entity<InputState>,
+    /// Last row scrolled to and the list top it set; keyboard steps continue from it.
+    nav: Option<(Row, usize)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -167,6 +170,7 @@ impl DiffView {
             matches: HashMap::new(),
             search_open: false,
             search,
+            nav: None,
             _subscriptions: subscriptions,
         };
         this.sync(window, cx);
@@ -347,8 +351,89 @@ impl DiffView {
 
     fn scroll_to(&mut self, target: &ScrollTarget, cx: &mut Context<Self>) {
         if let Some((ix, context)) = self.target_row(target, cx) {
-            self.list.scroll_to(ListOffset { item_ix: ix.saturating_sub(context), offset_in_item: px(0.) });
-            cx.notify();
+            self.scroll_to_row(ix, context, cx);
+        }
+    }
+
+    /// Scroll so `context` rows show above row `ix`, and select its file.
+    fn scroll_to_row(&mut self, ix: usize, context: usize, cx: &mut Context<Self>) {
+        let top = ix.saturating_sub(context);
+        self.list.scroll_to(ListOffset { item_ix: top, offset_in_item: px(0.) });
+        self.nav = Some((self.rows[ix], top));
+        // The top row may belong to the previous file; select the target's.
+        if let Some(path) = self.model.read(cx).files.get(self.rows[ix].file()).map(|f| f.filename.clone()) {
+            self.model.update(cx, |m, cx| m.set_selected_from_scroll(&path, cx));
+        }
+        cx.notify();
+    }
+
+    /// Row a keyboard step starts from: the last target while the list has not moved
+    /// away from it, otherwise the top visible row.
+    fn nav_from(&self) -> usize {
+        let top = self.list.logical_scroll_top().item_ix;
+        self.nav
+            .and_then(|(row, set_top)| {
+                let ix = self.rows.iter().position(|&r| r == row)?;
+                let visible = self.list.item_is_above_viewport(ix) == Some(false)
+                    && self.list.item_is_below_viewport(ix) == Some(false);
+                (set_top == top || visible).then_some(ix)
+            })
+            .unwrap_or(top)
+    }
+
+    /// Scroll to the next or previous block of changed lines, wrapping around.
+    pub fn step_change(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let model = self.model.read(cx);
+        // A block starts at a changed line row whose previous row is not one; threads and forms in between are skipped.
+        let mut prev_changed = false;
+        let starts: Vec<bool> = self
+            .rows
+            .iter()
+            .map(|&r| {
+                if matches!(r, Row::Thread(..) | Row::NewComment(_)) {
+                    return false;
+                }
+                let changed = self.row_lines(model, r).iter().flatten().any(|l| l.kind != DiffLineKind::Context);
+                let start = changed && !prev_changed;
+                prev_changed = changed;
+                start
+            })
+            .collect();
+        if let Some(ix) = find_wrapping(starts.len(), Some(self.nav_from()), forward, |i| starts[i]) {
+            self.scroll_to_row(ix, SCROLL_CONTEXT, cx);
+        }
+    }
+
+    /// Scroll to the next or previous unresolved thread, wrapping around.
+    /// Threads in collapsed or not loaded files count at the file header; landing there opens the file.
+    pub fn step_thread(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let model = self.model.read(cx);
+        let hidden_thread = |fi: usize| {
+            let file = &model.files[fi];
+            if !(model.collapsed.contains(&file.filename) || file.is_large()) {
+                return None;
+            }
+            let mut open = model.threads_for(&file.filename).filter(|t| !t.is_resolved);
+            if forward { open.next() } else { open.last() }.map(|t| t.root.id)
+        };
+        let hits: Vec<bool> = self
+            .rows
+            .iter()
+            .map(|&r| match r {
+                Row::Thread(_, id) => model.threads.iter().any(|t| t.root.id == id && !t.is_resolved),
+                Row::File(fi) => hidden_thread(fi).is_some(),
+                _ => false,
+            })
+            .collect();
+        let Some(ix) = find_wrapping(hits.len(), Some(self.nav_from()), forward, |i| hits[i]) else { return };
+        match self.rows[ix] {
+            Row::File(fi) => {
+                let (path, id) = (model.files[fi].filename.clone(), hidden_thread(fi));
+                if let Some(id) = id {
+                    self.model.update(cx, |m, cx| m.open(&path, ScrollTarget::Thread(id), cx));
+                }
+            }
+            _ => self.scroll_to_row(ix, SCROLL_CONTEXT, cx),
         }
     }
 
@@ -696,13 +781,11 @@ impl DiffView {
                     .small()
                     .label("Viewed")
                     .checked(model.reviewed.contains(&file.filename))
+                    .tooltip("Mark viewed (V)")
                     .on_click(cx.listener(move |this, _: &bool, _, cx| {
                         this.model.update(cx, |m, cx| {
-                            m.toggle_reviewed(&reviewed, cx);
-                            // The file collapsed: pin its header to the top so the next file follows right below.
-                            if m.reviewed.contains(reviewed.as_ref()) {
-                                cx.emit(PrEvent::ScrollTo(ScrollTarget::File(reviewed.to_string())));
-                            }
+                            m.selected = Some(reviewed.to_string());
+                            m.toggle_selected_reviewed(cx);
                         })
                     })),
             )

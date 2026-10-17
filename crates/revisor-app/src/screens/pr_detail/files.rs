@@ -5,7 +5,7 @@ use crate::{backend, theme};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    input::{Input, InputEvent, InputState},
+    input::{Escape, Input, InputEvent, InputState},
     progress::Progress,
     scroll::ScrollableElement as _,
     *,
@@ -221,7 +221,7 @@ impl FilesPanel {
                             .child(
                                 Checkbox::new(SharedString::from(format!("viewed-box:{}", row.path)))
                                     .checked(reviewed)
-                                    .tooltip("Viewed")
+                                    .tooltip("Viewed (V)")
                                     .on_click(move |_, _, cx| {
                                         model.update(cx, |m, cx| m.toggle_reviewed(&viewed_path, cx))
                                     }),
@@ -279,6 +279,8 @@ impl Render for FilesPanel {
             .child(
                 h_flex()
                     .gap_1()
+                    // Escape leaves the filter; focus goes back to the diff shortcuts.
+                    .on_action(|_: &Escape, window, cx| window.blur(cx))
                     .child(Input::new(&self.filter).small().cleanable(true).flex_1())
                     .child(
                         Button::new("file-view")
