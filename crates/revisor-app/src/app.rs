@@ -2,7 +2,7 @@
 
 use crate::{appearance, backend, theme};
 use crate::screens::{
-    auth::AuthScreen, pr_detail::{self, PrDetailScreen}, pr_list::PrListScreen, repos::ReposScreen, settings::SettingsScreen,
+    auth::AuthScreen, pr_detail::{self, PrDetailScreen}, pr_list::{self, PrListScreen}, repos::ReposScreen, settings::SettingsScreen,
 };
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
@@ -46,7 +46,15 @@ impl Route {
                     (vec![Box::new(ShowShortcuts)], "for all shortcuts"),
                 ],
             ),
-            Route::PrList { .. } => (None, vec![(vec![Box::new(GoBack)], "to go back"), (vec![Box::new(OpenSettings)], "for settings")]),
+            Route::PrList { .. } => (
+                Some(pr_list::CONTEXT),
+                vec![
+                    (vec![Box::new(pr_list::SelectNext), Box::new(pr_list::SelectPrev)], "to move between PRs"),
+                    (vec![Box::new(pr_list::OpenSelected)], "to open"),
+                    (vec![Box::new(GoBack)], "to go back"),
+                    (vec![Box::new(OpenSettings)], "for settings"),
+                ],
+            ),
             Route::Repos => (None, vec![(vec![Box::new(OpenSettings)], "for settings")]),
             Route::Settings { .. } => (None, vec![(vec![Box::new(GoBack)], "to go back")]),
             Route::Auth => (None, vec![]),

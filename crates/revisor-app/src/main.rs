@@ -55,6 +55,7 @@ fn main() {
             backend::init(cx);
             appearance::init(cx);
             screens::pr_detail::init(cx);
+            screens::pr_list::init(cx);
 
             cx.on_action(|_: &Quit, cx| cx.quit());
             // Global, so it works with nothing focused. Deferred: action handlers run inside a window update.

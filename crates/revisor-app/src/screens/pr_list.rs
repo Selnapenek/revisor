@@ -1,4 +1,5 @@
-//! Pull requests of one repository: state tabs, client-side search, advanced filters, infinite scroll.
+//! Pull requests of one repository: state tabs, client-side search, advanced filters, infinite scroll,
+//! keyboard selection.
 
 use crate::app::{self, Route};
 use crate::{backend, theme};
@@ -6,7 +7,7 @@ use gpui_kit::component::{
     badge::Badge,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
-    input::{Input, InputEvent, InputState},
+    input::{Escape, Input, InputEvent, InputState},
     notification::Notification,
     popover::Popover,
     scroll::ScrollableElement as _,
@@ -25,6 +26,19 @@ const PER_PAGE: u32 = 30;
 const STATES: [PrState; 3] = [PrState::Open, PrState::Closed, PrState::All];
 const ROW: &str = "pr-row";
 
+actions!(pr_list, [SelectPrev, SelectNext, OpenSelected]);
+
+pub(crate) const CONTEXT: &str = "PrList";
+
+/// Inputs bind up/down/enter in their own deeper `Input` context, so typing is not affected.
+pub fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("up", SelectPrev, Some(CONTEXT)),
+        KeyBinding::new("down", SelectNext, Some(CONTEXT)),
+        KeyBinding::new("enter", OpenSelected, Some(CONTEXT)),
+    ]);
+}
+
 /// `(value, label, color, checked)` of a dropdown option.
 type DropdownOption = (String, String, Option<Hsla>, bool);
 
@@ -41,6 +55,9 @@ pub struct PrListScreen {
     prs: Vec<PullRequest>,
     /// Indexes into `prs` matching the search, refreshed on render.
     visible: Vec<usize>,
+    /// Number of the PR picked with the arrow keys; survives filtering and paging.
+    selected: Option<u64>,
+    focus: FocusHandle,
     labels: Vec<Label>,
     authors: Vec<PrUser>,
     assignees: Vec<PrUser>,
@@ -64,7 +81,7 @@ impl PrListScreen {
         let author_search = input("Filter authors...", window, cx);
         let label_search = input("Filter labels...", window, cx);
         let assignee_search = input("Filter assignees...", window, cx);
-        let subscriptions = [&search, &author_search, &label_search, &assignee_search]
+        let mut subscriptions: Vec<_> = [&search, &author_search, &label_search, &assignee_search]
             .into_iter()
             .map(|input| {
                 cx.subscribe(input, |_, _, event: &InputEvent, cx| {
@@ -74,6 +91,11 @@ impl PrListScreen {
                 })
             })
             .collect();
+
+        let focus = cx.focus_handle();
+        focus.focus(window, cx);
+        // A focused input went away (filter popover closed): keep the arrow keys working.
+        subscriptions.push(cx.on_focus_lost(window, |this, window, cx| this.focus.focus(window, cx)));
 
         let key = format!("{owner}/{repo}");
         let load = backend::spawn(
@@ -106,6 +128,8 @@ impl PrListScreen {
             assignee_search,
             prs: Vec::new(),
             visible: Vec::new(),
+            selected: None,
+            focus,
             labels: Vec::new(),
             authors: Vec::new(),
             assignees: Vec::new(),
@@ -178,6 +202,27 @@ impl PrListScreen {
     fn load_more(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.has_next && !self.loading {
             self.load(self.page + 1, window, cx);
+        }
+    }
+
+    /// Position of the selected PR among the visible rows.
+    fn selected_pos(&self) -> Option<usize> {
+        self.visible.iter().position(|&ix| Some(self.prs[ix].number) == self.selected)
+    }
+
+    /// Move the selection by `delta` rows; the first press selects the top row.
+    fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(last) = self.visible.len().checked_sub(1) else { return };
+        let pos = self.selected_pos().map_or(0, |p| p.saturating_add_signed(delta).min(last));
+        self.selected = Some(self.prs[self.visible[pos]].number);
+        self.scroll.scroll_to_item(pos, ScrollStrategy::Nearest);
+        cx.notify();
+    }
+
+    fn open_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(pos) = self.selected_pos() {
+            let number = self.prs[self.visible[pos]].number;
+            app::navigate(Route::PrDetail { owner: self.owner.clone(), repo: self.repo.clone(), number }, window, cx);
         }
     }
 
@@ -377,6 +422,7 @@ impl PrListScreen {
                 let pr = &self.prs[ix];
                 let route = Route::PrDetail { owner: self.owner.clone(), repo: self.repo.clone(), number: pr.number };
                 let comments = pr.comments_count + pr.review_comments_count;
+                let selected = self.selected == Some(pr.number);
                 h_flex()
                     .id(("pr", pr.number))
                     .group(ROW)
@@ -388,8 +434,12 @@ impl PrListScreen {
                     .border_color(theme.border)
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.list_hover))
+                    .when(selected, |el| el.bg(theme.list_active))
                     .on_click(move |_, window, cx| app::navigate(route.clone(), window, cx))
-                    .child(theme::margin_mark(theme.primary).invisible().group_hover(ROW, |s| s.visible()))
+                    .child(
+                        theme::margin_mark(theme.primary)
+                            .when(!selected, |el| el.invisible().group_hover(ROW, |s| s.visible())),
+                    )
                     .child(
                         div()
                             .w(px(64.))
@@ -545,7 +595,10 @@ impl Render for PrListScreen {
                 h_flex()
                     .ml_auto()
                     .gap_3()
-                    .child(Input::new(&self.search).small().w(px(240.)))
+                    // Escape leaves the search; focus goes back to the arrow-key list.
+                    .child(
+                        div().on_action(|_: &Escape, window, cx| window.blur(cx)).child(Input::new(&self.search).small().w(px(240.))),
+                    )
                     .child(
                         TabBar::new("pr-state")
                             .segmented()
@@ -557,7 +610,15 @@ impl Render for PrListScreen {
                             .child(Tab::new().label("All")),
                     ),
             );
-        v_flex().size_full().child(header).child(
+        v_flex()
+            .size_full()
+            .key_context(CONTEXT)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &SelectPrev, _, cx| this.move_selection(-1, cx)))
+            .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.move_selection(1, cx)))
+            .on_action(cx.listener(|this, _: &OpenSelected, window, cx| this.open_selected(window, cx)))
+            .child(header)
+            .child(
             div().flex_1().overflow_hidden().mt_2().child(
                 theme::island(cx).flex().flex_col().child(self.render_filters(cx)).child(self.render_list(cx)),
             ),
