@@ -2,6 +2,10 @@
 
 Fast, offline-capable code review for GitHub repositories.
 
+## Roadmap
+
+See the [product roadmap](docs/roadmap.md) for current priorities, progress, release criteria, and the next task.
+
 ## Run
 
 Native app built with [gpui-kit](https://gpui-kit.com):
