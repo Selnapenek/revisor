@@ -116,6 +116,8 @@ pub struct PullRequest {
 pub struct PrFile {
     pub sha: String,
     pub filename: String,
+    /// Old path of a renamed file.
+    pub previous_filename: Option<String>,
     pub status: String,
     pub additions: u64,
     pub deletions: u64,

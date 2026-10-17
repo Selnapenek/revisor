@@ -55,9 +55,9 @@ fn match_at(s: &str, query: &str) -> Option<usize> {
 }
 
 /// All matches across every file/hunk/line, in navigation order.
-pub fn search_files(files: &[ProcessedFile], query: &str) -> Vec<CodeMatch> {
+pub fn search_files<'a>(files: impl IntoIterator<Item = &'a ProcessedFile>, query: &str) -> Vec<CodeMatch> {
     let mut out = Vec::new();
-    for (file, f) in files.iter().enumerate() {
+    for (file, f) in files.into_iter().enumerate() {
         let Some(diff) = &f.diff else { continue };
         for (hunk, h) in diff.hunks.iter().enumerate() {
             for (line, l) in h.lines.iter().enumerate() {
@@ -197,6 +197,7 @@ mod tests {
         let file = |lines: Vec<DiffLine>| ProcessedFile {
             sha: String::new(),
             filename: String::new(),
+            previous_filename: None,
             status: String::new(),
             additions: 0,
             deletions: 0,

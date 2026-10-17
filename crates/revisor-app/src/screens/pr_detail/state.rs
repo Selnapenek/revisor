@@ -107,6 +107,8 @@ pub struct PrModel {
     file_lines_pending: HashSet<(String, String)>,
     /// Large files whose diff is being loaded on demand.
     diff_loading: HashSet<String>,
+    /// Why the last on-demand load of a large file's diff failed.
+    diff_errors: HashMap<String, String>,
     _load: Task<()>,
     _files_load: Option<Task<()>>,
 }
@@ -158,6 +160,7 @@ impl PrModel {
             file_lines: HashMap::new(),
             file_lines_pending: HashSet::new(),
             diff_loading: HashSet::new(),
+            diff_errors: HashMap::new(),
             _load: Task::ready(()),
             _files_load: None,
         };
@@ -227,8 +230,9 @@ impl PrModel {
 
     fn set_files(&mut self, files: Vec<ProcessedFile>, cx: &mut Context<Self>) {
         self.selected = files.first().map(|f| f.filename.clone());
-        // Recorded rows belong to the old file set.
+        // Recorded rows and load failures belong to the old file set.
         self.history.clear();
+        self.diff_errors.clear();
         self.files = files;
         self.refilter(cx);
     }
@@ -545,9 +549,7 @@ impl PrModel {
 
     fn research(&mut self) {
         let Some(s) = &mut self.search else { return };
-        let visible: Vec<ProcessedFile> = self.visible.iter().map(|&i| self.files[i].clone()).collect();
-        // ponytail: clones visible files per query; search over indexes if large PRs feel slow.
-        s.matches = search::search_files(&visible, &s.query);
+        s.matches = search::search_files(self.visible.iter().map(|&i| &self.files[i]), &s.query);
         s.active = s.active.min(s.matches.len().saturating_sub(1));
     }
 
@@ -620,14 +622,15 @@ impl PrModel {
     }
 
     /// Fetch both versions of a large file and diff them locally, since GitHub sends no patch for it.
-    // ponytail: renamed files fetch the old version at the new path and fail; add `previous_filename` if needed.
     pub fn load_diff(&mut self, path: &str, cx: &mut Context<Self>) {
         let (Some(base), Some(head)) = (self.base_sha(), self.head_sha()) else { return };
         let Some(file) = self.files.iter().find(|f| f.filename == path) else { return };
         let (base, head, status) = (base.to_string(), head.to_string(), file.status.clone());
+        let old_path = file.previous_filename.clone().unwrap_or_else(|| path.to_string());
         if !self.diff_loading.insert(path.to_string()) {
             return;
         }
+        self.diff_errors.remove(path);
         let (o, r, p) = (self.owner.to_string(), self.repo.to_string(), path.to_string());
         let fetch = backend::call(cx, {
             let head = head.clone();
@@ -635,7 +638,7 @@ impl PrModel {
                 let provider = s.provider().await?;
                 let old = match status.as_str() {
                     "added" => String::new(),
-                    _ => provider.get_file_content(&o, &r, &p, &base).await.map_err(backend::err)?,
+                    _ => provider.get_file_content(&o, &r, &old_path, &base).await.map_err(backend::err)?,
                 };
                 let new = match status.as_str() {
                     "removed" => String::new(),
@@ -662,7 +665,9 @@ impl PrModel {
                         }
                         this.research();
                     }
-                    Err(e) => notify_error(format!("Failed to load diff: {e}"), cx),
+                    Err(e) => {
+                        this.diff_errors.insert(path, e);
+                    }
                 }
                 cx.notify();
             })
@@ -674,6 +679,10 @@ impl PrModel {
 
     pub fn diff_loading(&self, path: &str) -> bool {
         self.diff_loading.contains(path)
+    }
+
+    pub fn diff_error(&self, path: &str) -> Option<&str> {
+        self.diff_errors.get(path).map(String::as_str)
     }
 
     /// Cached lines of `path` at `git_ref`, without fetching.

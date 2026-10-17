@@ -78,7 +78,7 @@ Recruitment and documentation can proceed while release-blocking defects are fix
 | R1-02 | Add navigation history that returns to the prior file and line after search or comment jumps | Not started | Acceptance evidence not recorded |
 | R1-03 | Make shortcuts discoverable through visible help and control labels | Not started | Acceptance evidence not recorded |
 | R1-04 | Open a pasted GitHub PR URL with clear access, invalid-URL, and loading errors | In progress | 2026-10-17: URL parser and error-message unit tests pass; manual check in the app pending |
-| R1-05 | Verify and improve large-PR responsiveness while diffs load | Not started | On-demand loading exists in `3586142`; trial verification pending |
+| R1-05 | Verify and improve large-PR responsiveness while diffs load | In progress | 2026-10-17: syntax colors for diffs over 1,000 lines move off the UI thread (20k lines measured 313 ms in release); inline loading/failure/retry, threads of unloaded files, and unsearched large files are marked; manual check on a large PR pending |
 
 ### Acceptance checklist
 

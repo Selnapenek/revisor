@@ -36,6 +36,8 @@ const LINE_HEIGHT: Rems = rems(1.25);
 /// Rows kept above a scrolled-to line or thread.
 const SCROLL_CONTEXT: usize = 3;
 const LINE_GROUP: &str = "diff-line";
+/// Diffs with more lines get syntax colors off the UI thread and show plain until then.
+const SYNC_SYNTAX_LINES: usize = 1_000;
 
 /// One list row. File indexes point into `PrModel::files`.
 #[derive(Clone, Copy, PartialEq)]
@@ -112,8 +114,9 @@ pub struct DiffView {
     list: ListState,
     /// Context-expanded hunks by path, for the current commit selection.
     expanded: HashMap<String, Expanded>,
-    /// Syntax colors by path, filled when a file's lines first render.
-    syntax: HashMap<String, FileSyntax>,
+    /// Syntax colors by path, filled when a file's lines first render. Dropping an entry
+    /// drops its background highlight task, so stale colors never arrive.
+    syntax: HashMap<String, (FileSyntax, Task<()>)>,
     /// Expand click waiting for the file content.
     pending_expand: Option<(usize, Expand)>,
     new_comment: Option<NewTarget>,
@@ -255,7 +258,13 @@ impl DiffView {
             }
             let diff = match &file.diff {
                 _ if file.is_large() => {
+                    // Threads have no lines to anchor to yet; keep them readable and reachable.
                     rows.push(Row::LoadDiff(fi));
+                    rows.extend(model.threads_for(&file.filename).map(|t| Row::Thread(fi, t.root.id)));
+                    continue;
+                }
+                None if file.status == "renamed" => {
+                    rows.push(Row::Notice(fi, "File renamed without changes"));
                     continue;
                 }
                 None => {
@@ -450,12 +459,12 @@ impl DiffView {
     }
 
     /// Scroll to the next or previous unresolved thread, wrapping around.
-    /// Threads in collapsed or not loaded files count at the file header; landing there opens the file.
+    /// Threads in collapsed files count at the file header; landing there opens the file.
     pub fn step_thread(&mut self, forward: bool, cx: &mut Context<Self>) {
         let model = self.model.read(cx);
         let hidden_thread = |fi: usize| {
             let file = &model.files[fi];
-            if !(model.collapsed.contains(&file.filename) || file.is_large()) {
+            if !model.collapsed.contains(&file.filename) {
                 return None;
             }
             let mut open = model.threads_for(&file.filename).filter(|t| !t.is_resolved);
@@ -566,13 +575,35 @@ impl DiffView {
         self.expanded.insert(path, Expanded { hunks, side_by_side });
     }
 
-    fn ensure_syntax(&mut self, fi: usize, cx: &App) {
+    fn ensure_syntax(&mut self, fi: usize, cx: &mut Context<Self>) {
         let model = self.model.read(cx);
-        let path = &model.files[fi].filename;
-        if !self.syntax.contains_key(path) {
-            let syntax = FileSyntax::new(path, self.hunks(model, fi), &cx.theme().highlight_theme);
-            self.syntax.insert(path.clone(), syntax);
+        let path = model.files[fi].filename.clone();
+        if self.syntax.contains_key(&path) {
+            return;
         }
+        let hunks = self.hunks(model, fi);
+        let theme = cx.theme().highlight_theme.clone();
+        if hunks.iter().map(|h| h.lines.len()).sum::<usize>() <= SYNC_SYNTAX_LINES {
+            let syntax = FileSyntax::new(&path, hunks, &theme);
+            self.syntax.insert(path, (syntax, Task::ready(())));
+            return;
+        }
+        let hunks = hunks.to_vec();
+        let task = cx.spawn({
+            let path = path.clone();
+            async move |this, cx| {
+                let file = path.clone();
+                let syntax = cx.background_spawn(async move { FileSyntax::new(&file, &hunks, &theme) }).await;
+                this.update(cx, |this, cx| {
+                    if let Some(entry) = this.syntax.get_mut(&path) {
+                        entry.0 = syntax;
+                        cx.notify();
+                    }
+                })
+                .ok();
+            }
+        });
+        self.syntax.insert(path, (FileSyntax::default(), task));
     }
 
     /// Gutter `+` press. Shift/Cmd+press (or any press after a Cmd+press) on the same file and side
@@ -734,19 +765,27 @@ impl DiffView {
                 .child(text)
                 .into_any_element(),
             Row::LoadDiff(fi) => {
-                let path = model.files[fi].filename.clone();
+                let file = &model.files[fi];
+                let path = file.filename.clone();
+                let loading = model.diff_loading(&path);
+                let error = model.diff_error(&path);
+                let message = match (loading, error) {
+                    (true, _) => "Loading diff…".to_string(),
+                    (false, Some(e)) => format!("Could not load diff: {e}"),
+                    (false, None) => format!("Large diff not shown (+{} −{})", file.additions, file.deletions),
+                };
                 v_flex()
                     .py_8()
                     .gap_2()
                     .items_center()
                     .text_sm()
-                    .text_color(theme.muted_foreground)
-                    .child("Large diffs are not rendered by default.")
+                    .text_color(if error.is_some() && !loading { theme.danger } else { theme.muted_foreground })
+                    .child(message)
                     .child(
                         Button::new(("load-diff", fi))
                             .small()
-                            .label("Load diff")
-                            .loading(model.diff_loading(&path))
+                            .label(if error.is_some() { "Retry" } else { "Load diff" })
+                            .loading(loading)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.model.update(cx, |m, cx| m.load_diff(&path, cx));
                             })),
@@ -1004,7 +1043,7 @@ impl DiffView {
             };
             Some((s.range, HighlightStyle { background_color: Some(bg), ..Default::default() }))
         });
-        let syntax = self.syntax.get(&model.files[fi].filename).map_or(&[][..], |s| s.line(l));
+        let syntax = self.syntax.get(&model.files[fi].filename).map_or(&[][..], |(s, _)| s.line(l));
         let highlights = combine_highlights(syntax.iter().cloned(), backgrounds);
         let id = ElementId::NamedInteger(format!("code:{fi}:{:?}:{:?}", l.old_lineno, l.new_lineno).into(), order >> 32);
         div().flex_1().min_w_0().px_2().child(code_text(id, order, &l.content, highlights))
@@ -1090,11 +1129,15 @@ impl DiffView {
         let theme = cx.theme();
         let (query, total, active) =
             model.search.as_ref().map_or(("", 0, 0), |s| (s.query.as_str(), s.matches.len(), s.active));
-        let count = match (query.is_empty(), total) {
+        let mut count = match (query.is_empty(), total) {
             (true, _) => String::new(),
             (false, 0) => "No results".into(),
             _ => format!("{} of {total}", active + 1),
         };
+        let unsearched = model.visible.iter().filter(|&&i| model.files[i].is_large()).count();
+        if !query.is_empty() && unsearched > 0 {
+            count += &format!(" · {unsearched} large not searched");
+        }
         let step = |id: &'static str, icon: IconName, tooltip: &'static str, forward: bool| {
             Button::new(id)
                 .ghost()

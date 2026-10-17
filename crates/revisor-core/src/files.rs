@@ -316,6 +316,7 @@ mod tests {
         ProcessedFile {
             sha: String::new(),
             filename: name.into(),
+            previous_filename: None,
             status: "modified".into(),
             additions: 0,
             deletions: 0,

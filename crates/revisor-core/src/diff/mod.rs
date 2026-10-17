@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 pub struct ProcessedFile {
     pub sha: String,
     pub filename: String,
+    /// Old path of a renamed file.
+    pub previous_filename: Option<String>,
     pub status: String,
     pub additions: u64,
     pub deletions: u64,
@@ -95,6 +97,7 @@ pub fn process_pr_files(files: Vec<PrFile>) -> Vec<ProcessedFile> {
             ProcessedFile {
                 sha: file.sha,
                 filename: file.filename,
+                previous_filename: file.previous_filename,
                 status: file.status,
                 additions: file.additions,
                 deletions: file.deletions,
@@ -193,6 +196,7 @@ mod tests {
         let file = |additions, diff| ProcessedFile {
             sha: String::new(),
             filename: String::new(),
+            previous_filename: None,
             status: "modified".into(),
             additions,
             deletions: 0,
@@ -205,6 +209,7 @@ mod tests {
         let capped = process_pr_files(vec![PrFile {
             sha: String::new(),
             filename: String::new(),
+            previous_filename: None,
             status: "modified".into(),
             additions: 1,
             deletions: 0,

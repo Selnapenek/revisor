@@ -384,6 +384,7 @@ struct GhRef {
 struct GhPrFile {
     sha: String,
     filename: String,
+    previous_filename: Option<String>,
     status: String,
     additions: u64,
     deletions: u64,
@@ -608,6 +609,7 @@ impl From<GhPrFile> for PrFile {
         Self {
             sha: f.sha,
             filename: f.filename,
+            previous_filename: f.previous_filename,
             status: f.status,
             additions: f.additions,
             deletions: f.deletions,
