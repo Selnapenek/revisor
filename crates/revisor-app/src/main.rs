@@ -72,8 +72,10 @@ fn main() {
                     }
                 })
             });
+            cx.on_action(|_: &app::ToggleTips, cx| cx.defer(|cx| appearance::set_tips(!appearance::tips(cx), cx)));
             cx.bind_keys([
                 KeyBinding::new("cmd-q", Quit, None),
+                KeyBinding::new("cmd-/", app::ToggleTips, None),
                 KeyBinding::new("cmd-[", app::GoBack, None),
                 KeyBinding::new("cmd-,", app::OpenSettings, None),
             ]);

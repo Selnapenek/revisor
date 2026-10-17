@@ -1062,7 +1062,7 @@ impl DiffView {
                     .xsmall()
                     .icon(IconName::ChevronLeft)
                     .label("Back")
-                    .tooltip(format!("Back to {place} (⌘[)"))
+                    .tooltip_with_action(format!("Back to {place}"), &crate::app::GoBack, None)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.model.update(cx, |m, cx| m.go_back(cx));
                     }))
@@ -1073,7 +1073,7 @@ impl DiffView {
                     .xsmall()
                     .icon(IconName::Search)
                     .selected(model.search.is_some())
-                    .tooltip("Search in diff (⌘F)")
+                    .tooltip_with_action("Search in diff", &super::ToggleSearch, Some(super::CONTEXT))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.model.update(cx, |m, cx| if m.search.is_some() { m.close_search(cx) } else { m.open_search(cx) })
                     })),

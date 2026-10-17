@@ -1,4 +1,4 @@
-//! Appearance settings (theme, fonts, scale): stored in the `settings` table and applied to the global `Theme`.
+//! Appearance settings (theme, fonts, scale, quick tips): stored in the `settings` table and applied to the global `Theme`.
 
 use crate::backend;
 use gpui_kit::component::{Theme, ThemeRegistry};
@@ -14,9 +14,11 @@ pub enum Field {
     UiFont,
     CodeFont,
     Scale,
+    /// Shortcut tips in the status bar: "on" / "off".
+    Tips,
 }
 
-const FIELDS: [Field; 4] = [Field::Theme, Field::UiFont, Field::CodeFont, Field::Scale];
+const FIELDS: [Field; 5] = [Field::Theme, Field::UiFont, Field::CodeFont, Field::Scale, Field::Tips];
 
 impl Field {
     fn key(self) -> &'static str {
@@ -25,6 +27,7 @@ impl Field {
             Field::UiFont => "appearance.ui_font",
             Field::CodeFont => "appearance.code_font",
             Field::Scale => "appearance.scale",
+            Field::Tips => "appearance.quick_tips",
         }
     }
 
@@ -34,11 +37,12 @@ impl Field {
             Field::UiFont => "JetBrains Mono",
             Field::CodeFont => "JetBrains Mono",
             Field::Scale => "100",
+            Field::Tips => "on",
         }
     }
 }
 
-struct Appearance([SharedString; 4]);
+struct Appearance([SharedString; 5]);
 impl Global for Appearance {}
 
 /// Load saved values and apply them before the first window opens, so the app never flashes the default theme.
@@ -67,8 +71,16 @@ pub fn set(field: Field, value: SharedString, cx: &mut App) {
     cx.background_executor().spawn(save).detach();
 }
 
+pub fn tips(cx: &App) -> bool {
+    get(Field::Tips, cx) != "off"
+}
+
+pub fn set_tips(on: bool, cx: &mut App) {
+    set(Field::Tips, if on { "on" } else { "off" }.into(), cx);
+}
+
 fn apply(cx: &mut App) {
-    let [theme, ui_font, code_font, scale] = cx.global::<Appearance>().0.clone();
+    let [theme, ui_font, code_font, scale, _] = cx.global::<Appearance>().0.clone();
     let themes = ThemeRegistry::global(cx).themes();
     let config = themes.get(&theme).or_else(|| themes.get(DEFAULT_THEME)).cloned().expect("theme.json has the default theme");
     let mode = config.mode;

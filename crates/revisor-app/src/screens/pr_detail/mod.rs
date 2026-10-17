@@ -16,6 +16,7 @@ use crate::app;
 use crate::{backend, theme, video};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
+    kbd::Kbd,
     resizable::{h_resizable, resizable_panel},
     spinner::Spinner,
     tab::{Tab, TabBar},
@@ -44,10 +45,11 @@ actions!(
         NextUnreviewed,
         PrevUnreviewed,
         ToggleViewed,
+        ShowShortcuts,
     ]
 );
 
-const CONTEXT: &str = "PrDetail";
+pub(crate) const CONTEXT: &str = "PrDetail";
 /// Letter keys must not fire while typing in an input.
 const NOT_TYPING: &str = "PrDetail && !Input";
 const SIDEBAR_WIDTH_KEY: &str = "sidebar-width";
@@ -70,7 +72,62 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("u", NextUnreviewed, Some(NOT_TYPING)),
         KeyBinding::new("shift-u", PrevUnreviewed, Some(NOT_TYPING)),
         KeyBinding::new("v", ToggleViewed, Some(NOT_TYPING)),
+        KeyBinding::new("?", ShowShortcuts, Some(NOT_TYPING)),
     ]);
+}
+
+/// Keys are read from the live bindings, so the list cannot drift from `init`.
+/// Context lookup, not focus: Settings opens it too, with no PR on screen.
+pub fn open_shortcuts(window: &mut Window, cx: &mut App) {
+    let groups: [(&str, Vec<(&str, Box<dyn Action>)>); 3] = [
+        ("Navigate", vec![
+            ("Next / previous change", Box::new(NextChange)),
+            ("", Box::new(PrevChange)),
+            ("Next / previous comment thread", Box::new(NextThread)),
+            ("", Box::new(PrevThread)),
+            ("Next / previous unreviewed file", Box::new(NextUnreviewed)),
+            ("", Box::new(PrevUnreviewed)),
+            ("Next / previous file", Box::new(NextFile)),
+            ("", Box::new(PrevFile)),
+            ("Back to previous place", Box::new(app::GoBack)),
+        ]),
+        ("Review", vec![
+            ("Mark file viewed", Box::new(ToggleViewed)),
+            ("Filter files", Box::new(FocusFileFilter)),
+            ("Search in diff", Box::new(ToggleSearch)),
+            ("Close search", Box::new(CloseSearch)),
+            ("Switch files / conversations", Box::new(ToggleConversations)),
+        ]),
+        ("App", vec![("Settings", Box::new(app::OpenSettings)), ("Show shortcuts", Box::new(ShowShortcuts))]),
+    ];
+    // A row with an empty label adds its key to the row above ("j k").
+    let mut sections: Vec<(SharedString, Vec<(SharedString, Vec<Kbd>)>)> = Vec::new();
+    for (title, actions) in groups {
+        let mut rows: Vec<(SharedString, Vec<Kbd>)> = Vec::new();
+        for (label, action) in actions {
+            let Some(kbd) = Kbd::binding_for_action(action.as_ref(), Some(CONTEXT), window) else { continue };
+            match rows.last_mut() {
+                Some((_, keys)) if label.is_empty() => keys.push(kbd),
+                _ => rows.push((label.into(), vec![kbd])),
+            }
+        }
+        sections.push((title.into(), rows));
+    }
+    window.open_dialog(cx, move |dialog, _, cx| {
+        let muted = cx.theme().muted_foreground;
+        dialog.title("Keyboard shortcuts").w(px(420.)).child(v_flex().gap_4().text_sm().children(sections.iter().map(
+            |(title, rows)| {
+                v_flex().gap_1().child(div().text_xs().text_color(muted).child(title.clone())).children(rows.iter().map(
+                    |(label, keys)| {
+                        h_flex()
+                            .justify_between()
+                            .child(label.clone())
+                            .child(h_flex().gap_1().children(keys.iter().cloned()))
+                    },
+                ))
+            },
+        )))
+    });
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -160,7 +217,7 @@ impl PrDetailScreen {
                     .ghost()
                     .small()
                     .label("← PRs")
-                    .tooltip("Back to pull requests")
+                    .tooltip_with_action("Back to pull requests", &app::GoBack, None)
                     .on_click(|_, window, cx| app::go_back(window, cx)),
             )
             .child(Button::new("sidebar-toggle").ghost().small().label("Sidebar").selected(self.sidebar_open).on_click(
@@ -351,6 +408,7 @@ impl Render for PrDetailScreen {
                     cx.propagate();
                 }
             }))
+            .on_action(|_: &ShowShortcuts, window, cx| open_shortcuts(window, cx))
             .on_action(cx.listener(|this, _: &ToggleViewed, _, cx| this.model.update(cx, |m, cx| m.toggle_selected_reviewed(cx))))
             .on_action(cx.listener(|this, _: &ToggleConversations, _, cx| {
                 this.tab = if this.tab == SidebarTab::Files { SidebarTab::Conversations } else { SidebarTab::Files };

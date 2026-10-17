@@ -517,7 +517,7 @@ impl Render for PrListScreen {
                     .ghost()
                     .small()
                     .label("← Repos")
-                    .tooltip("Back (⌘[)")
+                    .tooltip_with_action("Back", &app::GoBack, None)
                     .on_click(|_, window, cx| app::go_back(window, cx)),
             )
             .child(

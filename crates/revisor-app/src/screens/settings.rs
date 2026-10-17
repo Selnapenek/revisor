@@ -1,6 +1,7 @@
 //! Settings screen: appearance (theme, fonts, scale).
 
 use crate::{app, theme};
+use crate::screens::pr_detail;
 use crate::appearance::{self, Field};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
@@ -83,6 +84,28 @@ impl Render for SettingsScreen {
             SettingGroup::new().title("Scaling").item(
                 SettingItem::new("Interface scale", dropdown(Field::Scale, scales)).description("Size of all text and rows."),
             ),
+            SettingGroup::new()
+                .title("Help")
+                .item(
+                    SettingItem::new(
+                        "Quick tips",
+                        SettingField::switch(appearance::tips, appearance::set_tips).default_value(true),
+                    )
+                    .description("Shortcuts for the current screen, in the status bar (⌘/)."),
+                )
+                .item(
+                    SettingItem::new(
+                        "Keyboard shortcuts",
+                        SettingField::render(|_, _, _| {
+                            Button::new("shortcuts")
+                                .small()
+                                .outline()
+                                .label("Show")
+                                .on_click(|_, window, cx| pr_detail::open_shortcuts(window, cx))
+                        }),
+                    )
+                    .description("Every key for reviewing a pull request. Press ? on a pull request to open it there."),
+                ),
         ]);
 
         let header = h_flex()
@@ -95,7 +118,7 @@ impl Render for SettingsScreen {
                     .ghost()
                     .small()
                     .label("← Back")
-                    .tooltip("Back (⌘[)")
+                    .tooltip_with_action("Back", &app::GoBack, None)
                     .on_click(|_, window, cx| app::go_back(window, cx)),
             )
             .child(div().font_family(theme.mono_font_family.clone()).text_2xl().child("Settings"));
