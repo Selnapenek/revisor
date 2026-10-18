@@ -237,11 +237,12 @@ impl PrListScreen {
     }
 
     /// Move the selection by `delta` rows; the first press selects the top row.
-    fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+    fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(last) = self.visible.len().checked_sub(1) else { return };
         let pos = self.selected_pos().map_or(0, |p| p.saturating_add_signed(delta).min(last));
         self.selected = Some(self.prs[self.visible[pos]].number);
         self.scroll.scroll_to_item(pos, ScrollStrategy::Nearest);
+        app::preload_pr(Route::PrDetail { owner: self.owner.clone(), repo: self.repo.clone(), number: self.prs[self.visible[pos]].number }, window, cx);
         cx.notify();
     }
 
@@ -447,6 +448,7 @@ impl PrListScreen {
             .map(|&ix| {
                 let pr = &self.prs[ix];
                 let route = Route::PrDetail { owner: self.owner.clone(), repo: self.repo.clone(), number: pr.number };
+                let hover_route = route.clone();
                 let comments = pr.comments_count + pr.review_comments_count;
                 // Both timestamps are `YYYY-MM-DDTHH:MM:SSZ`, so string order is time order.
                 let freshness = match self.views.get(&pr.number) {
@@ -466,6 +468,9 @@ impl PrListScreen {
                     .border_color(theme.border)
                     .cursor_pointer()
                     .hover(|s| s.bg(theme.list_hover))
+                    .on_hover(move |hovered, window, cx| {
+                        if *hovered { app::preload_pr(hover_route.clone(), window, cx); }
+                    })
                     .when(selected, |el| el.bg(theme.list_active))
                     .on_click(move |_, window, cx| app::navigate(route.clone(), window, cx))
                     .child(
@@ -668,8 +673,8 @@ impl Render for PrListScreen {
             .size_full()
             .key_context(CONTEXT)
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &SelectPrev, _, cx| this.move_selection(-1, cx)))
-            .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.move_selection(1, cx)))
+            .on_action(cx.listener(|this, _: &SelectPrev, window, cx| this.move_selection(-1, window, cx)))
+            .on_action(cx.listener(|this, _: &SelectNext, window, cx| this.move_selection(1, window, cx)))
             .on_action(cx.listener(|this, _: &OpenSelected, window, cx| this.open_selected(window, cx)))
             .child(header)
             .child(

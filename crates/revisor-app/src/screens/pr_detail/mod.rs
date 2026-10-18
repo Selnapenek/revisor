@@ -181,11 +181,12 @@ impl PrDetailScreen {
         repo: SharedString,
         number: u64,
         viewer: Option<String>,
+        preloaded: Option<Entity<PrModel>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         mark_viewed(owner.to_string(), repo.to_string(), number, cx);
-        let model = cx.new(|cx| PrModel::new(owner.clone(), repo.clone(), number, viewer, cx));
+        let model = preloaded.unwrap_or_else(|| cx.new(|cx| PrModel::new(owner.clone(), repo.clone(), number, viewer, cx)));
         let files = cx.new(|cx| files::FilesPanel::new(model.clone(), window, cx));
         let conversations = cx.new(|cx| conversations::ConversationsPanel::new(model.clone(), window, cx));
         let ai = cx.new(|cx| ai::AiPanel::new(model.clone(), window, cx));
@@ -213,7 +214,7 @@ impl PrDetailScreen {
             ],
             model,
             tab: SidebarTab::Files,
-            sidebar_width: None,
+            sidebar_width: Some(px(SIDEBAR_DEFAULT)),
             sidebar_open: true,
             description_open: true,
             focus,

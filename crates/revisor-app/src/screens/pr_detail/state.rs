@@ -180,7 +180,7 @@ impl PrModel {
         self.error = None;
         let (o, r, number) = (self.owner.to_string(), self.repo.to_string(), self.number);
         let viewer = self.viewer.clone();
-        let load = backend::call(cx, move |s| async move {
+        let load = backend::call_cancellable(cx, move |s| async move {
             let p = s.provider().await?;
             // join, not try_join: the PR's own error (missing, no access) explains the others.
             let (pr, files, comments, issue_comments, reviews, resolutions, commits) = tokio::join!(

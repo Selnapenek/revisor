@@ -2,7 +2,7 @@
 
 use crate::{appearance, backend, theme};
 use crate::screens::{
-    auth::AuthScreen, pr_detail::{self, PrDetailScreen}, pr_list::{self, PrListScreen}, repos::ReposScreen, settings::SettingsScreen,
+    auth::AuthScreen, pr_detail::{self, state::PrModel, PrDetailScreen}, pr_list::{self, PrListScreen}, repos::ReposScreen, settings::SettingsScreen,
 };
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
@@ -15,7 +15,7 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::*, *};
 use revisor_core::provider::types::{ProviderUser, RateLimitInfo};
 use revisor_core::ai_usage::{self, Usage, WindowUsage};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 actions!(revisor_nav, [GoBack, OpenSettings, ToggleTips]);
 
@@ -83,6 +83,12 @@ pub fn navigate(route: Route, window: &mut Window, cx: &mut App) {
     root.update(cx, |root, cx| root.go(route, window, cx)).ok();
 }
 
+/// Start loading one PR while its list row is hovered or selected.
+pub fn preload_pr(route: Route, window: &mut Window, cx: &mut App) {
+    let root = cx.global::<Nav>().0.clone();
+    root.update(cx, |root, cx| root.preload_pr(route, window, cx)).ok();
+}
+
 /// Go one level up (PR detail → PR list → repos).
 pub fn go_back(window: &mut Window, cx: &mut App) {
     let root = cx.global::<Nav>().0.clone();
@@ -141,6 +147,9 @@ pub struct AppRoot {
     screen: Option<AnyView>,
     pr_list: Option<(SharedString, SharedString, Entity<PrListScreen>)>,
     pr_details: Vec<(Route, Entity<PrDetailScreen>)>,
+    preloaded_pr: Option<(Route, Entity<PrModel>, Instant)>,
+    pending_preload: Option<Route>,
+    _preload_delay: Task<()>,
     user: Option<ProviderUser>,
     rate: Option<RateLimitInfo>,
     usage: Option<Vec<Usage>>,
@@ -192,7 +201,33 @@ impl AppRoot {
                 ticks = ticks.wrapping_add(1);
             }
         });
-        Self { route: Route::Auth, screen: None, pr_list: None, pr_details: Vec::new(), user: None, rate: None, usage: None, nav: 0, _poll: poll, _restore: restore }
+        Self { route: Route::Auth, screen: None, pr_list: None, pr_details: Vec::new(), preloaded_pr: None, pending_preload: None, _preload_delay: Task::ready(()), user: None, rate: None, usage: None, nav: 0, _poll: poll, _restore: restore }
+    }
+
+    fn preload_pr(&mut self, route: Route, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.route, Route::PrList { .. })
+            || self.pr_details.iter().any(|(key, _)| key == &route)
+            || self.preloaded_pr.as_ref().is_some_and(|(key, model, at)| {
+                key == &route && model.read(cx).error.is_none()
+                    && (model.read(cx).loading || at.elapsed() < Duration::from_secs(60))
+            })
+            || self.pending_preload.as_ref() == Some(&route)
+        {
+            return;
+        }
+        self.pending_preload = Some(route.clone());
+        self._preload_delay = cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(120)).await;
+            this.update_in(cx, |this, _, cx| {
+                if this.pending_preload.as_ref() != Some(&route) { return; }
+                this.pending_preload = None;
+                if let Route::PrDetail { owner, repo, number } = &route {
+                    let viewer = this.user.as_ref().map(|u| u.login.clone());
+                    let model = cx.new(|cx| PrModel::new(owner.clone(), repo.clone(), *number, viewer, cx));
+                    this.preloaded_pr = Some((route, model, Instant::now()));
+                }
+            }).ok();
+        });
     }
 
     fn refresh_usage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -212,6 +247,8 @@ impl AppRoot {
         if self.screen.is_some() && route == self.route {
             return;
         }
+        self.pending_preload = None;
+        self._preload_delay = Task::ready(());
         if let Route::PrDetail { owner, repo, number } = &self.route {
             pr_detail::mark_viewed(owner.to_string(), repo.to_string(), *number, cx);
         }
@@ -219,9 +256,13 @@ impl AppRoot {
             Route::Auth => {
                 self.pr_list = None;
                 self.pr_details.clear();
+                self.preloaded_pr = None;
                 cx.new(|cx| AuthScreen::new(window, cx)).into()
             }
-            Route::Repos => cx.new(|cx| ReposScreen::new(window, cx)).into(),
+            Route::Repos => {
+                self.preloaded_pr = None;
+                cx.new(|cx| ReposScreen::new(window, cx)).into()
+            }
             Route::PrList { owner, repo } => {
                 let cached = self.pr_list.as_ref()
                     .filter(|(cached_owner, cached_repo, _)| cached_owner == owner && cached_repo == repo)
@@ -244,7 +285,11 @@ impl AppRoot {
                     detail.into()
                 } else {
                     let viewer = self.user.as_ref().map(|u| u.login.clone());
-                    let detail = cx.new(|cx| PrDetailScreen::new(owner.clone(), repo.clone(), *number, viewer, window, cx));
+                    let preloaded = self.preloaded_pr.take().and_then(|(key, model, at)| {
+                        (key == route && model.read(cx).error.is_none()
+                            && (model.read(cx).loading || at.elapsed() < Duration::from_secs(60))).then_some(model)
+                    });
+                    let detail = cx.new(|cx| PrDetailScreen::new(owner.clone(), repo.clone(), *number, viewer, preloaded, window, cx));
                     if self.pr_details.len() == 5 {
                         self.pr_details.remove(0);
                     }
