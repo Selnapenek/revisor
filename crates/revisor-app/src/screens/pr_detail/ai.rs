@@ -56,8 +56,8 @@ pub struct AiPanel {
 }
 
 fn setting_key(m: &PrModel) -> String {
-    // v2: recap split into summary, evidence, danger and spec.
-    format!("ai-review-v2:{}/{}#{}", m.owner, m.repo, m.number)
+    // v5: the full base-commit rule catalog fits the bounded review input.
+    format!("ai-review-v5:{}/{}#{}", m.owner, m.repo, m.number)
 }
 
 fn short(sha: &str) -> &str {
@@ -373,8 +373,14 @@ impl AiPanel {
             _ => ("no spec in description", muted),
         };
         let standards = match review.standards.is_empty() {
-            true => "No standards files on the base branch".to_string(),
+            true if review.standards_status == "limited" => "No standards files loaded".to_string(),
+            true => "No standards files found on the base branch".to_string(),
             false => format!("Rules from {}", review.standards.join(", ")),
+        };
+        let (standards_label, standards_color) = match review.standards_status.as_str() {
+            "checked" => ("Checked in supplied diff", theme.success),
+            "limited" => ("Limited: rule files skipped", theme.warning),
+            _ => ("No rules loaded", muted),
         };
         let groups = ai_review::AXES.map(|(axis, title)| {
             let all: Vec<_> = review.comments.iter().enumerate().filter(|(_, c)| c.axis == axis).collect();
@@ -431,6 +437,20 @@ impl AiPanel {
                     .gap_1()
                     .child(theme::stamp(spec_label, spec_color, theme))
                     .child(TextView::markdown("ai-spec", review.spec.note.clone())),
+                cx,
+            ))
+            .child(Self::section(
+                "Standards check",
+                v_flex()
+                    .gap_1()
+                    .child(theme::stamp(standards_label, standards_color, theme))
+                    .child(div().text_color(muted).child(standards.clone()))
+                    .child(theme::eyebrow("Applicable rules", cx))
+                    .child(TextView::markdown("ai-standards-applicable", review.standards_check.applicable.clone()))
+                    .child(theme::eyebrow("Supported by diff", cx))
+                    .child(TextView::markdown("ai-standards-passing", review.standards_check.passing.clone()))
+                    .child(theme::eyebrow("Cannot check from diff", cx))
+                    .child(TextView::markdown("ai-standards-unchecked", review.standards_check.unchecked.clone())),
                 cx,
             ))
             .children(groups)
