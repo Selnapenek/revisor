@@ -1,4 +1,4 @@
-//! PR detail: header, resizable sidebar (files / conversations / AI / semantic) and the diff.
+//! PR detail: header, resizable sidebar, and the diff.
 
 mod ai;
 mod code_text;
@@ -15,7 +15,7 @@ mod syntax;
 pub mod state;
 
 use crate::app;
-use crate::{backend, theme, video};
+use crate::{backend, experimental, theme, video};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     kbd::Kbd,
@@ -170,10 +170,16 @@ pub(crate) fn mark_viewed(owner: String, repo: String, number: u64, cx: &App) {
 impl PrDetailScreen {
     pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus.focus(window, cx);
+        if !experimental::enabled(cx) && self.tab == SidebarTab::Semantic {
+            self.tab = SidebarTab::Files;
+        }
         let model = self.model.read(cx);
         mark_viewed(model.owner.to_string(), model.repo.to_string(), model.number, cx);
         self.model.update(cx, |model, cx| model.reload(cx));
         self.ai.update(cx, |ai, cx| ai.reload_agents(window, cx));
+        self.files.update(cx, |_, cx| cx.notify());
+        self.conversations.update(cx, |_, cx| cx.notify());
+        cx.notify();
     }
 
     pub fn new(
@@ -403,13 +409,13 @@ impl PrDetailScreen {
 
     fn sidebar(&self, cx: &Context<Self>) -> impl IntoElement {
         let model = self.model.read(cx);
-        let tabs = [
+        let mut tabs = vec![
             format!("Files {}", model.files.len()),
             format!("Conversations {}", model.conversation_count()),
             "AI".to_string(),
-            "Semantic".to_string(),
         ];
-        let selected = self.tab as usize;
+        if experimental::enabled(cx) { tabs.push("Semantic".to_string()); }
+        let selected = if !experimental::enabled(cx) && self.tab == SidebarTab::Semantic { 0 } else { self.tab as usize };
         v_flex()
             .size_full()
             .when(!model.commits.is_empty(), |el| el.child(commits::CommitSelector::new(self.model.clone())))
@@ -417,7 +423,9 @@ impl PrDetailScreen {
                 TabBar::new("sidebar-tabs")
                     .selected_index(selected)
                     .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                        this.tab = [SidebarTab::Files, SidebarTab::Conversations, SidebarTab::Ai, SidebarTab::Semantic][*ix];
+                        let tabs = [SidebarTab::Files, SidebarTab::Conversations, SidebarTab::Ai, SidebarTab::Semantic];
+                        if *ix >= 3 && !experimental::enabled(cx) { return; }
+                        this.tab = tabs[*ix];
                         cx.notify();
                     }))
                     .children(tabs.into_iter().map(|label| Tab::new().label(label))),
@@ -428,7 +436,8 @@ impl PrDetailScreen {
                     SidebarTab::Files => self.files.clone().into(),
                     SidebarTab::Conversations => self.conversations.clone().into(),
                     SidebarTab::Ai => self.ai.clone().into(),
-                    SidebarTab::Semantic => self.semantic.clone().into(),
+                    SidebarTab::Semantic if experimental::enabled(cx) => self.semantic.clone().into(),
+                    SidebarTab::Semantic => self.files.clone().into(),
                 };
                 view.cached(StyleRefinement::default().size_full())
             }))

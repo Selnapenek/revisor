@@ -2,6 +2,7 @@ mod ai_runs;
 mod app;
 mod appearance;
 mod backend;
+mod experimental;
 mod screens;
 mod theme;
 mod video;
@@ -56,6 +57,7 @@ fn main() {
             backend::init(cx);
             ai_runs::init(cx);
             appearance::init(cx);
+            experimental::init(cx);
             screens::pr_detail::init(cx);
             screens::pr_list::init(cx);
 

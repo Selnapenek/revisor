@@ -527,7 +527,7 @@ impl Render for FilesPanel {
         };
         v_flex()
             .size_full()
-            .child(self.focus.clone())
+            .when(crate::experimental::enabled(cx), |el| el.child(self.focus.clone()))
             .child(filters)
             .child(progress)
             .child(div().flex_1().min_h_0().child(list))
@@ -653,6 +653,7 @@ impl FocusPanel {
     }
 
     fn analyze(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !crate::experimental::enabled(cx) { return; }
         if !self.has_key {
             self.show_key_form = true;
             cx.notify();

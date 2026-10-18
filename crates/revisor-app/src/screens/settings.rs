@@ -1,6 +1,6 @@
 //! Settings screen: appearance and AI review defaults.
 
-use crate::{app, backend, theme};
+use crate::{app, backend, experimental, theme};
 use crate::screens::pr_detail;
 use crate::appearance::{self, Field};
 use gpui_kit::component::{
@@ -337,6 +337,16 @@ impl Render for SettingsScreen {
                 ),
         ]);
 
+        let experimental = SettingPage::new("expritrimental").resettable(false).group(
+            SettingGroup::new().title("TypeSafe").item(
+                SettingItem::new(
+                    "Enable TypeSafe features",
+                    SettingField::switch(experimental::enabled, experimental::set_enabled),
+                )
+                .description("Shows Review focus, Findings, and Semantic search on pull requests. These features send review content to TypeSafe when you use them."),
+            ),
+        );
+
         let header = h_flex()
             .flex_shrink_0()
             .gap_3()
@@ -355,7 +365,7 @@ impl Render for SettingsScreen {
             .size_full()
             .child(header)
             .child(div().flex_1().overflow_hidden().mt_2().child(theme::island(cx).child(
-                Settings::new("settings").page(appearance).page(self.ai_page(Backend::Claude, cx)).page(self.ai_page(Backend::Codex, cx))
+                Settings::new("settings").page(appearance).page(self.ai_page(Backend::Claude, cx)).page(self.ai_page(Backend::Codex, cx)).page(experimental)
             )))
     }
 }

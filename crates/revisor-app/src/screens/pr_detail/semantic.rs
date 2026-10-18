@@ -72,6 +72,7 @@ impl SemanticPanel {
     }
 
     fn search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !crate::experimental::enabled(cx) { return; }
         let query = self.query.read(cx).value().trim().to_string();
         let m = self.model.read(cx);
         let Some(pr) = m.pr.as_ref() else { return };

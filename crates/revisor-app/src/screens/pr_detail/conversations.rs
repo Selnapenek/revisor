@@ -157,6 +157,7 @@ impl ConversationsPanel {
     }
 
     fn rank(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !crate::experimental::enabled(cx) { return; }
         let m = self.model.read(cx);
         let Some(pr) = m.pr.clone() else { return };
         let findings = rf::select_findings(&m.comments, m.resolutions(), &self.authors);
@@ -525,6 +526,7 @@ impl ConversationsPanel {
 
 impl Render for ConversationsPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let experimental = crate::experimental::enabled(cx);
         v_flex()
             .size_full()
             .child(
@@ -532,15 +534,17 @@ impl Render for ConversationsPanel {
                     TabBar::new("conversation-mode")
                         .segmented()
                         .small()
-                        .selected_index(self.findings_mode as usize)
+                        .selected_index((experimental && self.findings_mode) as usize)
                         .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                            if *ix == 1 && !crate::experimental::enabled(cx) { return; }
                             this.findings_mode = *ix == 1;
                             cx.notify();
                         }))
-                        .children(["Timeline", "Findings"].map(|l| Tab::new().label(l))),
+                        .children(if experimental { vec!["Timeline", "Findings"] } else { vec!["Timeline"] }
+                            .into_iter().map(|label| Tab::new().label(label))),
                 ),
             )
-            .child(div().flex_1().min_h_0().child(if self.findings_mode {
+            .child(div().flex_1().min_h_0().child(if experimental && self.findings_mode {
                 self.findings(cx).into_any_element()
             } else {
                 self.timeline(cx).into_any_element()
