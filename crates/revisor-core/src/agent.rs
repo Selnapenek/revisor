@@ -51,6 +51,20 @@ pub fn installed() -> Vec<Backend> {
     [Backend::Claude, Backend::Codex].into_iter().filter(|b| executable_path(*b).is_some()).collect()
 }
 
+/// The CLI selected from PATH or a standard installer directory.
+pub fn cli_info(backend: Backend) -> Option<(PathBuf, String)> {
+    let path = executable_path(backend)?;
+    let version = std::process::Command::new(&path)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|version| !version.is_empty())
+        .unwrap_or_else(|| "Installed".into());
+    Some((path, version))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Effort {
     pub id: String,

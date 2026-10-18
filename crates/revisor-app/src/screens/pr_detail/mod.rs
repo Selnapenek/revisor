@@ -173,6 +173,7 @@ impl PrDetailScreen {
         let model = self.model.read(cx);
         mark_viewed(model.owner.to_string(), model.repo.to_string(), model.number, cx);
         self.model.update(cx, |model, cx| model.reload(cx));
+        self.ai.update(cx, |ai, cx| ai.reload_agents(window, cx));
     }
 
     pub fn new(

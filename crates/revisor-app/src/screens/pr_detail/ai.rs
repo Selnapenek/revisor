@@ -78,7 +78,27 @@ impl AiPanel {
                 }
             },
         );
-        let agents_load = backend::spawn(
+        let agents_load = Self::load_agents(window, cx);
+        Self {
+            model,
+            agents: Vec::new(),
+            selected: 0,
+            review: None,
+            busy: false,
+            error: None,
+            done: HashSet::new(),
+            _task: load,
+            _agents_load: agents_load,
+        }
+    }
+
+    /// Read current defaults when this PR screen returns from Settings.
+    pub fn reload_agents(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._agents_load = Self::load_agents(window, cx);
+    }
+
+    fn load_agents(window: &mut Window, cx: &mut Context<Self>) -> Task<()> {
+        backend::spawn(
             window,
             cx,
             |s| async move {
@@ -105,18 +125,7 @@ impl AiPanel {
                     cx.notify();
                 }
             },
-        );
-        Self {
-            model,
-            agents: Vec::new(),
-            selected: 0,
-            review: None,
-            busy: false,
-            error: None,
-            done: HashSet::new(),
-            _task: load,
-            _agents_load: agents_load,
-        }
+        )
     }
 
     fn save(key: String, value: String, cx: &App) {
