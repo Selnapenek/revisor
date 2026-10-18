@@ -19,10 +19,10 @@ Copy `.env.example` to `.env`, then replace the example value with your client I
 ```sh
 cp .env.example .env
 # Edit .env and set REVISOR_GITHUB_CLIENT_ID to your client ID.
-pnpm tauri dev
+cargo run -p revisor-app
 ```
 
-Use `pnpm tauri build` to build the app. The `pnpm tauri` command loads `.env` before it starts the Tauri CLI. Cargo reads the client ID at compile time, and the build script watches the environment variable and rebuilds when it changes. The `.env` file is local and is not part of Git. Do not add a client secret to it.
+Use `cargo build --release -p revisor-app` to build the native app. The core crate's build script reads `.env` at compile time, and Cargo rebuilds when it changes. A shell value for `REVISOR_GITHUB_CLIENT_ID` takes precedence. The `.env` file is local and is not part of Git. Do not add a client secret to it.
 
 The client ID is not a secret. Do not set a client secret. Users sign in by selecting **Sign in with GitHub**, then entering the code shown by Revisor at GitHub's device page. Revisor completes sign-in after approval.
 

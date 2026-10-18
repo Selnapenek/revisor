@@ -45,7 +45,7 @@ These capabilities are implemented in code; user verification is pending. This i
 | Diff search, file filters, commit selection, comments, and review submission | Native PR-detail modules in `crates/revisor-app/src/screens/pr_detail/` | Check an end-to-end review, including failure cases |
 | AI file suggestions and semantic search | Native files and semantic panels; shared core modules | Check usefulness, consent, revision validity, and analysis limits |
 
-The README describes an offline-capable app. Verify the actual offline limits before making release claims. Existing OAuth setup documentation includes Tauri commands; native setup instructions need verification under R0-02.
+The README describes an offline-capable app. Verify the actual offline limits before making release claims. Native setup instructions need verification under R0-02.
 
 ## Release 0 — Usable external trial
 
@@ -179,7 +179,7 @@ These are small-sample validation targets, not proof of market demand. Record th
 
 ## Delivery and verification rules
 
-- Use the native Rust app as the primary product. Keep the older Tauri interface as a fallback; do not expand both interfaces.
+- Use the native Rust app as the product interface.
 - Keep GitHub as the only provider until repeat use is established.
 - Make navigation and context useful without AI. Do not approve code automatically.
 - Use release gates rather than fixed dates until capacity is known.
