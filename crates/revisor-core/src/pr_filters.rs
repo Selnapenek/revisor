@@ -17,6 +17,15 @@ pub const REVIEW_STATUS_OPTIONS: [(&str, &str); 7] = [
     (REVIEW_REQUESTED_ME, "Awaiting your review"),
 ];
 
+/// `(value, label)` pairs for the AI review filter. GitHub does not know these, so the list filters loaded rows.
+pub const AI_STATUS_OPTIONS: [(&str, &str); 5] = [
+    ("reviewed", "Reviewed by AI"),
+    ("outdated", "AI review outdated"),
+    ("reviewing", "AI review running"),
+    ("failed", "AI review failed"),
+    ("none", "Not reviewed by AI"),
+];
+
 fn key(repo_key: &str) -> String {
     format!("pr-filters:{repo_key}")
 }
@@ -86,6 +95,7 @@ mod tests {
             labels: vec!["bug".into()],
             assignees: vec!["teammate".into()],
             review_status: Some("approved".into()),
+            ai_status: Some("reviewed".into()),
         }
     }
 
@@ -113,6 +123,9 @@ mod tests {
         for repo in ["org/missing", "org/broken", "org/invalid"] {
             assert!(load(&conn, repo).is_empty(), "{repo}");
         }
+        // Filters saved before the AI filter existed still load.
+        set_setting(&conn, "pr-filters:org/old", r#"{"authors":["a"],"labels":[],"assignees":[],"review_status":null}"#).unwrap();
+        assert_eq!(load(&conn, "org/old").authors, ["a"]);
     }
 
     #[test]

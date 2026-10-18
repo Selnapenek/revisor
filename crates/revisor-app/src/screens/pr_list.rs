@@ -1,7 +1,7 @@
 //! Pull requests of one repository: state tabs, API search, advanced filters, infinite scroll,
 //! keyboard selection, background AI reviews.
 
-use crate::ai_runs::{self, Finished};
+use crate::ai_runs::{self, AiRuns, Finished};
 use crate::app::{self, Route};
 use crate::{backend, theme};
 use gpui_kit::component::{
@@ -20,7 +20,7 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::*, *};
 use revisor_core::ai_review;
 use revisor_core::cache::queries;
-use revisor_core::pr_filters::{self, REVIEW_REQUESTED_ME, REVIEW_STATUS_OPTIONS};
+use revisor_core::pr_filters::{self, AI_STATUS_OPTIONS, REVIEW_REQUESTED_ME, REVIEW_STATUS_OPTIONS};
 use revisor_core::pr_list_cache::{PrListCache, PrListQuery, PrListSnapshot};
 use revisor_core::provider::types::{Label, PrSearchFilters, PrState, PrUser, PullRequest};
 use revisor_core::time::relative_time;
@@ -41,6 +41,28 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("down", SelectNext, Some(CONTEXT)),
         KeyBinding::new("enter", OpenSelected, Some(CONTEXT)),
     ]);
+}
+
+/// AI review state of one PR; `id` matches `AI_STATUS_OPTIONS`.
+#[derive(Clone, Copy, PartialEq)]
+enum AiStatus {
+    None,
+    Reviewing,
+    Failed,
+    Reviewed,
+    Outdated,
+}
+
+impl AiStatus {
+    fn id(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Reviewing => "reviewing",
+            Self::Failed => "failed",
+            Self::Reviewed => "reviewed",
+            Self::Outdated => "outdated",
+        }
+    }
 }
 
 /// `(value, label, color, checked)` of a dropdown option.
@@ -311,6 +333,22 @@ impl PrListScreen {
         }
     }
 
+    fn ai_status(&self, pr: &PullRequest, runs: &AiRuns) -> AiStatus {
+        let key = ai_review::review_key(&self.owner, &self.repo, pr.number);
+        if runs.is_running(&key) {
+            return AiStatus::Reviewing;
+        }
+        if runs.error(&key).is_some() {
+            return AiStatus::Failed;
+        }
+        // The list may lack the head commit when its GraphQL stats fail; then trust the saved review.
+        match self.ai_heads.get(&pr.number) {
+            Some(head) if pr.head_sha.is_empty() || *head == pr.head_sha => AiStatus::Reviewed,
+            Some(_) => AiStatus::Outdated,
+            None => AiStatus::None,
+        }
+    }
+
     /// Start an AI review of PR `number` in the background, or stop the one that runs.
     fn toggle_ai(&mut self, number: u64, cx: &mut Context<Self>) {
         let (owner, repo) = (self.owner.to_string(), self.repo.to_string());
@@ -342,7 +380,9 @@ impl PrListScreen {
     }
 
     /// Apply a filter change: persist it and reload after a 300 ms debounce.
+    /// The AI filter is local, so changing only it does not reload.
     fn update_filters(&mut self, f: impl FnOnce(&mut PrSearchFilters), window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.query_key(cx);
         f(&mut self.filters);
         let (key, filters) = (format!("{}/{}", self.owner, self.repo), self.filters.clone());
         backend::spawn(
@@ -355,7 +395,11 @@ impl PrListScreen {
             |_, _: Result<(), String>, _, _| {},
         )
         .detach();
-        self.schedule_reload(window, cx);
+        if self.query_key(cx) == query {
+            cx.notify();
+        } else {
+            self.schedule_reload(window, cx);
+        }
     }
 
     fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -430,10 +474,11 @@ impl PrListScreen {
             .iter()
             .map(|l| (l.name.clone(), l.name.clone(), Some(theme::hex(&l.color)), f.labels.contains(&l.name)))
             .collect();
-        let review_options = REVIEW_STATUS_OPTIONS
-            .iter()
-            .map(|(value, label)| (value.to_string(), label.to_string(), None, f.review_status.as_deref() == Some(*value)))
-            .collect();
+        let single = |options: &[(&str, &str)], selected: &Option<String>| -> Vec<DropdownOption> {
+            options.iter().map(|(value, label)| (value.to_string(), label.to_string(), None, selected.as_deref() == Some(*value))).collect()
+        };
+        let review_options = single(&REVIEW_STATUS_OPTIONS, &f.review_status);
+        let ai_options = single(&AI_STATUS_OPTIONS, &f.ai_status);
         let theme = cx.theme();
 
         h_flex()
@@ -506,6 +551,14 @@ impl PrListScreen {
                 |f, v| f.review_status = (f.review_status.as_deref() != Some(v)).then(|| v.to_string()),
                 cx,
             ))
+            .child(self.dropdown(
+                "ai",
+                "AI review",
+                None,
+                ai_options,
+                |f, v| f.ai_status = (f.ai_status.as_deref() != Some(v)).then(|| v.to_string()),
+                cx,
+            ))
             .when(!f.is_empty(), |el| {
                 el.child(
                     Button::new("clear-filters")
@@ -528,26 +581,27 @@ impl PrListScreen {
             .iter()
             .map(|&ix| {
                 let pr = &self.prs[ix];
-                let key = ai_review::review_key(&self.owner, &self.repo, pr.number);
-                let (running, failed) = (runs.is_running(&key), runs.error(&key));
-                // The list may lack the head commit when its GraphQL stats fail; then trust the saved review.
-                let current = self.ai_heads.get(&pr.number).map(|head| pr.head_sha.is_empty() || *head == pr.head_sha);
-                let ai_stamp = match (running, failed, current) {
-                    (true, ..) => Some(theme::stamp("AI reviewing", theme.primary, theme)),
-                    (_, Some(_), _) => Some(theme::stamp("AI failed", theme.danger, theme)),
-                    (_, _, Some(true)) => Some(theme::stamp("AI reviewed", theme.success, theme)),
-                    (_, _, Some(false)) => Some(theme::stamp("AI outdated", theme.warning, theme)),
-                    _ => None,
+                let status = self.ai_status(pr, runs);
+                let ai_stamp = match status {
+                    AiStatus::Reviewing => Some(theme::stamp("AI reviewing", theme.primary, theme)),
+                    AiStatus::Failed => Some(theme::stamp("AI failed", theme.danger, theme)),
+                    AiStatus::Reviewed => Some(theme::stamp("AI reviewed", theme.success, theme)),
+                    AiStatus::Outdated => Some(theme::stamp("AI outdated", theme.warning, theme)),
+                    AiStatus::None => None,
                 };
-                let ai_button = match (running, failed, current) {
-                    (true, ..) => Some(Button::new(("ai-run", pr.number)).ghost().label("Cancel AI").tooltip("Stop the AI review")),
-                    (_, Some(error), _) => Some(Button::new(("ai-run", pr.number)).outline().label("Retry AI").tooltip(error.to_string())),
-                    (_, _, Some(true)) => None,
-                    (_, _, Some(false)) => Some(Button::new(("ai-run", pr.number)).outline().label("Review new changes").tooltip("AI review of the latest commit, in the background")),
-                    _ => Some(Button::new(("ai-run", pr.number)).outline().label("AI review").tooltip("Recap and suggested comments, in the background")),
+                let button = Button::new(("ai-run", pr.number));
+                let ai_button = match status {
+                    AiStatus::Reviewing => Some(button.ghost().label("Cancel AI").tooltip("Stop the AI review")),
+                    AiStatus::Failed => {
+                        let error = runs.error(&ai_review::review_key(&self.owner, &self.repo, pr.number)).unwrap_or_default();
+                        Some(button.outline().label("Retry AI").tooltip(error.to_string()))
+                    }
+                    AiStatus::Reviewed => None,
+                    AiStatus::Outdated => Some(button.outline().label("Review new changes").tooltip("AI review of the latest commit, in the background")),
+                    AiStatus::None => Some(button.outline().label("AI review").tooltip("Recap and suggested comments, in the background")),
                 };
                 // Running and failed runs keep their button; others show it on hover, like the margin mark.
-                let pinned = running || failed.is_some();
+                let pinned = matches!(status, AiStatus::Reviewing | AiStatus::Failed);
                 let number = pr.number;
                 let route = Route::PrDetail { owner: self.owner.clone(), repo: self.repo.clone(), number: pr.number };
                 let hover_route = route.clone();
@@ -722,12 +776,36 @@ impl PrListScreen {
             .when(self.loading && !self.refreshing && !self.visible.is_empty(), |el| {
                 el.child(div().flex().justify_center().py_2().child(Spinner::new().color(theme.muted_foreground)))
             })
+            // GitHub cannot filter by AI review, so only loaded PRs are checked. No auto-loading: search allows 30 requests a minute.
+            .when(self.filters.ai_status.is_some() && self.has_next && !self.loading, |el| {
+                el.child(
+                    h_flex()
+                        .justify_center()
+                        .gap_2()
+                        .py_2()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child(format!("AI filter checks the {} loaded pull requests.", self.prs.len()))
+                        .child(
+                            Button::new("ai-load-more")
+                                .link()
+                                .xsmall()
+                                .label("Load more")
+                                .on_click(cx.listener(|this, _, window, cx| this.load_more(window, cx))),
+                        ),
+                )
+            })
     }
 }
 
 impl Render for PrListScreen {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.visible = (0..self.prs.len()).collect();
+        let runs = ai_runs::runs(cx);
+        let wanted = self.filters.ai_status.as_deref();
+        let visible = (0..self.prs.len())
+            .filter(|&ix| wanted.is_none_or(|w| self.ai_status(&self.prs[ix], runs.read(cx)).id() == w))
+            .collect();
+        self.visible = visible;
         let count_label = match self.total_count {
             Some(count) => format!("{count} pull request{}", if count == 1 { "" } else { "s" }),
             None if self.loading => "Loading pull requests…".to_string(),

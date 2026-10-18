@@ -71,6 +71,9 @@ pub struct PrSearchFilters {
     pub labels: Vec<String>,
     pub assignees: Vec<String>,
     pub review_status: Option<String>,
+    /// Local AI review state (`pr_filters::AI_STATUS_OPTIONS`); not part of the GitHub query.
+    #[serde(default)]
+    pub ai_status: Option<String>,
 }
 
 impl PrSearchFilters {
@@ -79,6 +82,7 @@ impl PrSearchFilters {
             && self.labels.is_empty()
             && self.assignees.is_empty()
             && self.review_status.is_none()
+            && self.ai_status.is_none()
     }
 }
 
