@@ -50,6 +50,7 @@ pub struct AiPanel {
     done: HashSet<usize>,
     description_open: bool,
     report_open: bool,
+    details_open: bool,
     _load: Task<()>,
     _agents_load: Task<()>,
     _subscriptions: Vec<Subscription>,
@@ -98,6 +99,7 @@ impl AiPanel {
             done: HashSet::new(),
             description_open: true,
             report_open: true,
+            details_open: false,
             _load: load,
             _agents_load: agents_load,
             _subscriptions: subscriptions,
@@ -406,7 +408,6 @@ impl AiPanel {
     fn results(&self, review: &Review, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
-        let cost = review.cost_usd.map_or(String::new(), |c| format!(" · ${c:.2}"));
         let danger = &review.danger;
         let door_color = if danger.door == "one-way" { theme.danger } else { theme.success };
         let (spec_label, spec_color) = match review.spec.status.as_str() {
@@ -440,48 +441,9 @@ impl AiPanel {
                 .when(all.is_empty(), |el| el.child(div().px_3().py_2().text_color(muted).child("None found. The AI can miss problems.")))
                 .children(open.into_iter().map(|(i, c)| self.comment_row(*i, c, cx)))
         });
-        v_flex()
-            .when(!self.is_current(cx), |el| {
-                el.child(div().px_3().pt_3().text_color(theme.warning).child(format!(
-                    "This review is for commit {}. Run it again for the current changes.",
-                    short(&review.head_sha)
-                )))
-            })
-            .child(Self::section(
-                "Summary",
-                v_flex()
-                    .gap_1()
-                    .child(TextView::markdown("ai-summary", review.summary.clone()))
-                    .child(div().text_color(muted).child(format!(
-                        "AI suggestion · {} · {} · {}s{cost}",
-                        review.backend,
-                        short(&review.head_sha),
-                        review.seconds
-                    ))),
-                cx,
-            ))
+        let details = v_flex()
             .child(Self::section("Evidence", TextView::markdown("ai-evidence", review.evidence.clone()), cx))
-            .child(Self::section(
-                "Merge danger",
-                v_flex()
-                    .gap_1()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(theme::stamp(format!("{} door", danger.door), door_color, theme))
-                            .child(div().text_color(muted).child(format!("Blast radius: {}", danger.blast_radius))),
-                    )
-                    .child(div().child(danger.note.clone())),
-                cx,
-            ))
-            .child(Self::section(
-                "Spec",
-                v_flex()
-                    .gap_1()
-                    .child(theme::stamp(spec_label, spec_color, theme))
-                    .child(TextView::markdown("ai-spec", review.spec.note.clone())),
-                cx,
-            ))
+            .child(Self::section("Spec", TextView::markdown("ai-spec", review.spec.note.clone()), cx))
             .child(Self::section(
                 "Standards check",
                 v_flex()
@@ -496,7 +458,6 @@ impl AiPanel {
                     .child(TextView::markdown("ai-standards-unchecked", review.standards_check.unchecked.clone())),
                 cx,
             ))
-            .children(groups)
             .when(!review.skipped.is_empty(), |el| {
                 el.child(
                     v_flex()
@@ -506,7 +467,33 @@ impl AiPanel {
                         .child(theme::eyebrow(format!("Not reviewed {}", review.skipped.len()), cx))
                         .children(review.skipped.iter().map(|(file, reason)| div().child(format!("{file} · {reason}")))),
                 )
+            });
+        v_flex()
+            .when(!self.is_current(cx), |el| {
+                el.child(div().px_3().pt_3().text_color(theme.warning).child(format!(
+                    "This review is for commit {}. Run it again for the current changes.",
+                    short(&review.head_sha)
+                )))
             })
+            .child(Self::section("Summary", TextView::markdown("ai-summary", review.summary.clone()), cx))
+            .child(
+                v_flex()
+                    .gap_1()
+                    .p_3()
+                    .border_b_1()
+                    .border_color(theme.border)
+                    .child(
+                        h_flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .child(theme::stamp(format!("{} door", danger.door), door_color, theme))
+                            .child(div().text_color(muted).child(format!("Blast radius: {}", danger.blast_radius)))
+                            .child(theme::stamp(spec_label, spec_color, theme)),
+                    )
+                    .child(div().child(danger.note.clone())),
+            )
+            .children(groups)
+            .child(self.fold("ai-details-toggle", "Details", self.details_open, |this| &mut this.details_open, details, cx))
     }
 }
 
@@ -527,16 +514,30 @@ impl Render for AiPanel {
             (Some(_), true) => "Run again",
             (Some(_), false) => "Review new changes",
         };
+        let recap = self.review.as_ref().map(|r| {
+            let cost = r.cost_usd.map_or(String::new(), |c| format!(" · ${c:.2}"));
+            div().flex_1().min_w_0().text_color(theme.muted_foreground).child(format!(
+                "AI recap · {} · {} · {}s{cost}",
+                r.backend,
+                short(&r.head_sha),
+                r.seconds
+            ))
+        });
         let actions = v_flex()
             .gap_2()
             .p_3()
             .border_b_1()
             .border_color(theme.border)
+            .when(self.review.is_none(), |el| {
+                el.child(div().text_color(theme.muted_foreground).child(
+                    "Runs Claude Code or Codex with your account. The PR diff, title and description \
+                     go to Anthropic or OpenAI. You get a recap and suggested comments; nothing is posted.",
+                ))
+            })
             .children(self.choices(cx))
-            .child(h_flex().gap_2().child(
+            .child(h_flex().gap_2().items_center().children(recap).child(
                 Button::new("ai-run")
-                    .small()
-                    .primary()
+                    .map(|b| if self.review.is_some() { b.xsmall().ghost() } else { b.small().primary() })
                     .label(if busy { "Reviewing…" } else { label })
                     .loading(busy)
                     .disabled(busy || files_loading)
@@ -554,17 +555,7 @@ impl Render for AiPanel {
         let report = v_flex()
             .child(actions)
             .children(error.map(|e| div().px_3().pt_3().text_color(theme.danger).child(e)))
-            .child(match &self.review {
-                Some(review) => self.results(review, cx).into_any_element(),
-                None => div()
-                    .p_3()
-                    .text_color(theme.muted_foreground)
-                    .child(
-                        "Runs Claude Code or Codex with your account. The PR diff, title and description \
-                         go to Anthropic or OpenAI. You get a recap and suggested comments; nothing is posted.",
-                    )
-                    .into_any_element(),
-            });
+            .children(self.review.as_ref().map(|review| self.results(review, cx)));
         v_flex()
             .id("overview")
             .size_full()
