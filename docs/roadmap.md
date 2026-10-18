@@ -1,6 +1,6 @@
 # Revisor product roadmap
 
-Last updated: 2026-10-17
+Last updated: 2026-10-18
 
 ## Current focus
 
@@ -116,6 +116,7 @@ Start with source context and changed-file relationships. Do not require full re
 | R3-01 | Group related changes with a short behavior description and exact diff links | Not started | Acceptance evidence not recorded |
 | R3-02 | Suggest a reading order with reasons and links to relevant changed tests | Not started | Acceptance evidence not recorded |
 | R3-03 | Extend existing optional AI assistance; identify analyzed revisions, discard stale results, and list skipped files | Not started | Existing AI panels require task-specific verification |
+| R3-04 | One-click AI review: a recap of the change and suggested line comments from the installed Claude Code or Codex CLI | In progress | 2026-10-18: core tests pass; live CLI runs on a sample diff found both planted bugs (Claude Code 6 s, Codex 13 s). Running-app check and trial evidence are pending |
 
 ### Acceptance checklist
 
@@ -207,11 +208,14 @@ These are small-sample validation targets, not proof of market demand. Record th
 | 2026-10-17 | Native app first; optional AI assistance | Keep development focused and the core workflow independent of AI |
 | 2026-10-17 | Seek five external trial users before expanding scope | Only the owner is currently reported to use the app |
 | 2026-10-17 | Track acceptance separately from code presence | Existing implementation does not prove external usability |
+| 2026-10-18 | Replace the review-map attempt with one-click AI review | The user found the map added steps without value and asked for one button that gives a recap and suggested comments. The diff goes in the prompt, so no clone, checkout or consent step is needed. Calls use [Claude Code CLI](https://code.claude.com/docs/en/cli-reference) and [Codex CLI](https://learn.chatgpt.com/docs/non-interactive-mode) one-shot mode with a JSON schema and no tools. |
+| 2026-10-18 | Add skill ideas to one-click AI review | Recap uses the [pr skill](https://github.com/mattpocock/skills/blob/main/skills/engineering/pr/SKILL.md) layout (summary, evidence, merge danger). Comments keep the [code-review skill](https://github.com/mattpocock/skills/blob/main/skills/engineering/code-review/SKILL.md) axes apart (bug, spec, standards). Spec is the PR description; standards files are read from the base commit so a PR cannot change its own rules. Fixed-point questions, issue tracker and sub-agents are not used. |
 
 ## Progress log
 
 | Date | Task or release | Evidence and result | Next action |
 |---|---|---|---|
 | 2026-10-17 | Roadmap setup | Read repository documentation and recent history. Keyboard navigation was added in `e8516fa`; no external trial evidence was supplied. Product tasks remain open. | Start R0-01: clean-setup review verification |
+| 2026-10-18 | R3-04 one-click AI review | AI tab and header button added; result is saved per PR and marked outdated when the head commit changes. Jean has no Run environment, so no running-app check yet. | Check on a real PR; then measure how many suggested comments reviewers keep. |
 
 When work is completed, append a dated row and update its task status, evidence, and Current focus. Do not replace earlier observations.

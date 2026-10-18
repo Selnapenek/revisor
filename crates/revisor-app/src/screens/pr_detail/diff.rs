@@ -146,6 +146,12 @@ impl DiffView {
             cx.observe_in(&model, window, |this, _, window, cx| this.sync(window, cx)),
             cx.subscribe_in(&model, window, |this, _, event: &PrEvent, window, cx| {
                 let target = match event {
+                    PrEvent::DraftComment { path, side, line, body } => {
+                        if let Some(fi) = this.model.read(cx).files.iter().position(|f| &f.filename == path) {
+                            this.open_new_comment_with_body(fi, *side, *line, body, window, cx);
+                        }
+                        return;
+                    }
                     PrEvent::ScrollTo(target) => target,
                     PrEvent::JumpTo(target) => {
                         // Rows are not rebuilt yet, so this is where the user was.
@@ -657,12 +663,16 @@ impl DiffView {
 
     /// Primary button adds to the viewer's pending review (starting one if needed); the second posts at once.
     fn open_new_comment(&mut self, fi: usize, side: Side, line: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_new_comment_with_body(fi, side, line, "", window, cx);
+    }
+
+    fn open_new_comment_with_body(&mut self, fi: usize, side: Side, line: u64, body: &str, window: &mut Window, cx: &mut Context<Self>) {
         let reviewing = self.model.read(cx).pending_review.is_some();
         let (primary, single) =
             if reviewing { ("Add review comment", "Add single comment") } else { ("Start a review", "Comment") };
         let repo = self.model.read(cx).repo_name();
         let (form, subscription) =
-            CommentForm::open("", "Write a comment...", primary, repo, window, cx, move |this, form, event, window, cx| {
+            CommentForm::open(body, "Write a comment...", primary, repo, window, cx, move |this, form, event, window, cx| {
                 let (body, to_review) = match event {
                     CommentFormEvent::Submit(body) => (body, true),
                     CommentFormEvent::SubmitAlt(body) => (body, false),

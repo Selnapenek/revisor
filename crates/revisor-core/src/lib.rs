@@ -1,3 +1,5 @@
+pub mod agent;
+pub mod ai_review;
 pub mod auth;
 pub mod cache;
 pub mod comments;

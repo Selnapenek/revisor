@@ -52,6 +52,8 @@ const HISTORY_MAX: usize = 50;
 
 pub enum PrEvent {
     ScrollTo(ScrollTarget),
+    /// Open the new-comment form on a line, prefilled with `body`.
+    DraftComment { path: String, side: Side, line: u64, body: String },
     /// Like `ScrollTo`, but the diff view records where it was first, for Back.
     JumpTo(ScrollTarget),
     /// `selected` followed the diff scroll position. Not a `notify`, so views that only

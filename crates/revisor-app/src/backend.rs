@@ -31,6 +31,29 @@ where
     async move { handle.await.map_err(|e| e.to_string())? }
 }
 
+/// Like `call`, but stop the Tokio task when the GPUI caller drops its future.
+pub fn call_cancellable<T, Fut>(
+    cx: &App,
+    f: impl FnOnce(Arc<AppState>) -> Fut,
+) -> impl Future<Output = Result<T, String>> + 'static
+where
+    T: Send + 'static,
+    Fut: Future<Output = Result<T, String>> + Send + 'static,
+{
+    struct AbortOnDrop(tokio::task::AbortHandle);
+    impl Drop for AbortOnDrop {
+        fn drop(&mut self) { self.0.abort(); }
+    }
+    let backend = cx.global::<Backend>();
+    let task = backend.runtime.spawn(f(backend.state.clone()));
+    let guard = AbortOnDrop(task.abort_handle());
+    async move {
+        let result = task.await.map_err(|e| e.to_string())?;
+        drop(guard);
+        result
+    }
+}
+
 /// Run `f` on tokio and wait for it. Startup only: it blocks the UI thread.
 pub fn block_on<T, Fut>(cx: &App, f: impl FnOnce(Arc<AppState>) -> Fut) -> Result<T, String>
 where

@@ -7127,6 +7127,7 @@ dependencies = [
  "objc2-core-media",
  "objc2-foundation 0.3.2",
  "revisor-core",
+ "serde_json",
  "tokio",
 ]
 
@@ -7147,6 +7148,7 @@ dependencies = [
  "serde_json",
  "similar",
  "tar",
+ "tempfile",
  "tokio",
 ]
 

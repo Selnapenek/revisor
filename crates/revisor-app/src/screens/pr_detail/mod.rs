@@ -1,5 +1,6 @@
-//! PR detail: header, resizable sidebar (files / conversations / semantic) and the diff.
+//! PR detail: header, resizable sidebar (files / conversations / AI / semantic) and the diff.
 
+mod ai;
 mod code_text;
 mod comments;
 mod commits;
@@ -138,6 +139,7 @@ pub fn open_shortcuts(window: &mut Window, cx: &mut App) {
 enum SidebarTab {
     Files,
     Conversations,
+    Ai,
     Semantic,
 }
 
@@ -150,6 +152,7 @@ pub struct PrDetailScreen {
     focus: FocusHandle,
     files: Entity<files::FilesPanel>,
     conversations: Entity<conversations::ConversationsPanel>,
+    ai: Entity<ai::AiPanel>,
     semantic: Entity<semantic::SemanticPanel>,
     diff: Entity<diff::DiffView>,
     _subscriptions: Vec<Subscription>,
@@ -177,6 +180,7 @@ impl PrDetailScreen {
         let model = cx.new(|cx| PrModel::new(owner.clone(), repo.clone(), number, viewer, cx));
         let files = cx.new(|cx| files::FilesPanel::new(model.clone(), window, cx));
         let conversations = cx.new(|cx| conversations::ConversationsPanel::new(model.clone(), window, cx));
+        let ai = cx.new(|cx| ai::AiPanel::new(model.clone(), window, cx));
         let semantic = cx.new(|cx| semantic::SemanticPanel::new(model.clone(), window, cx));
         let diff = cx.new(|cx| diff::DiffView::new(model.clone(), window, cx));
         let width_load = backend::spawn(
@@ -193,6 +197,7 @@ impl PrDetailScreen {
         Self {
             _subscriptions: vec![
                 cx.observe(&model, |_, _, cx| cx.notify()),
+                cx.observe(&ai, |_, _, cx| cx.notify()),
                 // A focused input went away (search closed, comment sent or cancelled): keep the shortcuts working.
                 cx.on_focus_lost(window, |this, window, cx| this.focus.focus(window, cx)),
                 // Mark again on leave: activity made while the PR was open does not count as new.
@@ -206,6 +211,7 @@ impl PrDetailScreen {
             focus,
             files,
             conversations,
+            ai,
             semantic,
             diff,
             _width_load: width_load,
@@ -288,6 +294,17 @@ impl PrDetailScreen {
                     .on_click(move |_, _, cx| cx.open_url(&url))
             }))
             .children(model.pr.as_ref().map(|_| {
+                let busy = self.ai.read(cx).busy;
+                Button::new("ai-review")
+                    .small()
+                    .ghost()
+                    .label(if busy { "AI reviewing…" } else { "AI review" })
+                    .loading(busy)
+                    .disabled(model.files_loading)
+                    .tooltip("Recap and suggested comments from Claude Code or Codex")
+                    .on_click(cx.listener(|this, _, window, cx| this.ai_review(window, cx)))
+            }))
+            .children(model.pr.as_ref().map(|_| {
                 let count = model.pending_count();
                 let button = Button::new("review").small().tooltip("Submit a review: comment, approve or request changes");
                 let button = if model.pending_review.is_some() {
@@ -310,6 +327,16 @@ impl PrDetailScreen {
                         cx.notify();
                     }))
             }))
+    }
+
+    /// Show the AI tab; run a review unless one for this commit exists or is running.
+    fn ai_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab = SidebarTab::Ai;
+        self.sidebar_open = true;
+        if !self.ai.read(cx).is_current(cx) {
+            self.ai.update(cx, |ai, cx| ai.start(window, cx));
+        }
+        cx.notify();
     }
 
     fn open_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -370,6 +397,7 @@ impl PrDetailScreen {
         let tabs = [
             format!("Files {}", model.files.len()),
             format!("Conversations {}", model.conversation_count()),
+            "AI".to_string(),
             "Semantic".to_string(),
         ];
         let selected = self.tab as usize;
@@ -380,7 +408,7 @@ impl PrDetailScreen {
                 TabBar::new("sidebar-tabs")
                     .selected_index(selected)
                     .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                        this.tab = [SidebarTab::Files, SidebarTab::Conversations, SidebarTab::Semantic][*ix];
+                        this.tab = [SidebarTab::Files, SidebarTab::Conversations, SidebarTab::Ai, SidebarTab::Semantic][*ix];
                         cx.notify();
                     }))
                     .children(tabs.into_iter().map(|label| Tab::new().label(label))),
@@ -390,6 +418,7 @@ impl PrDetailScreen {
                 let view: AnyView = match self.tab {
                     SidebarTab::Files => self.files.clone().into(),
                     SidebarTab::Conversations => self.conversations.clone().into(),
+                    SidebarTab::Ai => self.ai.clone().into(),
                     SidebarTab::Semantic => self.semantic.clone().into(),
                 };
                 view.cached(StyleRefinement::default().size_full())
