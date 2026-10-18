@@ -48,6 +48,8 @@ pub struct AiPanel {
     error: Option<String>,
     /// Indexes of comments the user dismissed or turned into a draft.
     done: HashSet<usize>,
+    description_open: bool,
+    report_open: bool,
     _load: Task<()>,
     _agents_load: Task<()>,
     _subscriptions: Vec<Subscription>,
@@ -94,6 +96,8 @@ impl AiPanel {
             review: None,
             error: None,
             done: HashSet::new(),
+            description_open: true,
+            report_open: true,
             _load: load,
             _agents_load: agents_load,
             _subscriptions: subscriptions,
@@ -364,6 +368,41 @@ impl AiPanel {
         v_flex().gap_1().p_3().border_b_1().border_color(cx.theme().border).child(theme::eyebrow(title, cx)).child(body)
     }
 
+    /// A section that opens and closes from its header; `flag` picks its open state.
+    fn fold(
+        &self,
+        id: &'static str,
+        title: &'static str,
+        open: bool,
+        flag: fn(&mut Self) -> &mut bool,
+        body: impl IntoElement,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        v_flex()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(
+                Button::new(id)
+                    .ghost()
+                    .small()
+                    .w_full()
+                    .accessibility_label(format!("{} {title}", if open { "Close" } else { "Open" }))
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).xsmall())
+                            .child(theme::eyebrow(title, cx)),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let open = flag(this);
+                        *open = !*open;
+                        cx.notify();
+                    })),
+            )
+            .when(open, |el| el.child(body))
+    }
+
     fn results(&self, review: &Review, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
@@ -480,8 +519,8 @@ impl Render for AiPanel {
         let files_loading = m.files_loading;
         let body = m.pr.as_ref().and_then(|pr| pr.body.clone()).filter(|b| !b.trim().is_empty());
         let description = match body {
-            Some(body) => div().text_sm().child(TextView::markdown("pr-description", body).plugin(video::Videos)).into_any_element(),
-            None => div().text_color(theme.muted_foreground).child("No description.").into_any_element(),
+            Some(body) => div().px_3().pb_3().text_sm().child(TextView::markdown("pr-description", body).plugin(video::Videos)).into_any_element(),
+            None => div().px_3().pb_3().text_color(theme.muted_foreground).child("No description.").into_any_element(),
         };
         let label = match (&self.review, self.is_current(cx)) {
             (None, _) => "Run AI review",
@@ -512,12 +551,7 @@ impl Render for AiPanel {
                         .on_click(cx.listener(|this, _, _, cx| this.cancel(cx))),
                 )
             }));
-        v_flex()
-            .id("overview")
-            .size_full()
-            .text_xs()
-            .overflow_y_scrollbar()
-            .child(Self::section("Description", description, cx))
+        let report = v_flex()
             .child(actions)
             .children(error.map(|e| div().px_3().pt_3().text_color(theme.danger).child(e)))
             .child(match &self.review {
@@ -530,6 +564,13 @@ impl Render for AiPanel {
                          go to Anthropic or OpenAI. You get a recap and suggested comments; nothing is posted.",
                     )
                     .into_any_element(),
-            })
+            });
+        v_flex()
+            .id("overview")
+            .size_full()
+            .text_xs()
+            .overflow_y_scrollbar()
+            .child(self.fold("description-toggle", "Description", self.description_open, |this| &mut this.description_open, description, cx))
+            .child(self.fold("ai-report-toggle", "AI review", self.report_open, |this| &mut this.report_open, report, cx))
     }
 }
