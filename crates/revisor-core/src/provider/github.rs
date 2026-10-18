@@ -256,7 +256,7 @@ impl GithubProvider {
         }
         let fields: String = prs
             .iter()
-            .map(|pr| format!("p{0}: pullRequest(number: {0}) {{ additions deletions changedFiles totalCommentsCount }} ", pr.number))
+            .map(|pr| format!("p{0}: pullRequest(number: {0}) {{ additions deletions changedFiles totalCommentsCount headRefOid }} ", pr.number))
             .collect();
         let query = format!("query($owner: String!, $name: String!) {{ repository(owner: $owner, name: $name) {{ {fields}}} }}");
         if let Ok(data) = self.graphql(&query, serde_json::json!({ "owner": owner, "name": repo })).await {
@@ -1396,6 +1396,7 @@ fn apply_list_stats(repository: &serde_json::Value, prs: &mut [PullRequest]) {
         pr.changed_files = count("changedFiles").unwrap_or(0);
         pr.comments_count = count("totalCommentsCount").unwrap_or(0);
         pr.review_comments_count = 0;
+        pr.head_sha = node["headRefOid"].as_str().unwrap_or_default().to_string();
     }
 }
 
@@ -1504,11 +1505,12 @@ mod tests {
         };
         let mut prs = vec![pr(1), pr(2)];
         let repository = serde_json::json!({
-            "p1": { "additions": 10, "deletions": 3, "changedFiles": 2, "totalCommentsCount": 5 },
+            "p1": { "additions": 10, "deletions": 3, "changedFiles": 2, "totalCommentsCount": 5, "headRefOid": "abc" },
             "p2": null,
         });
         apply_list_stats(&repository, &mut prs);
         assert_eq!((prs[0].additions, prs[0].deletions, prs[0].changed_files, prs[0].comments_count), (10, 3, 2, 5));
+        assert_eq!(prs[0].head_sha, "abc");
         assert_eq!((prs[1].additions, prs[1].comments_count), (0, 0));
     }
 

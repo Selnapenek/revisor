@@ -4,12 +4,15 @@
 //! standards axes from the `code-review` skill: https://github.com/mattpocock/skills (MIT).
 
 use crate::agent::{self, Backend};
-use crate::diff::{parser::DiffLineKind, ProcessedFile};
+use crate::cache::queries;
+use crate::diff::{fetch_pr_files, parser::DiffLineKind, ProcessedFile};
 use crate::provider::GitProvider;
+use crate::AppState;
 use futures::future::join_all;
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::time::Duration;
 
@@ -321,6 +324,69 @@ pub struct Choice {
     pub effort: Option<String>,
 }
 
+/// Settings key of the saved review of a PR. An empty `number` gives the prefix for the whole repo.
+// v5: the full base-commit rule catalog fits the bounded review input.
+pub fn review_key(owner: &str, repo: &str, number: impl std::fmt::Display) -> String {
+    format!("ai-review-v5:{owner}/{repo}#{number}")
+}
+
+/// PR number to the head commit of its saved review, for one repo.
+pub fn reviewed_heads(conn: &Connection, owner: &str, repo: &str) -> anyhow::Result<HashMap<u64, String>> {
+    #[derive(Deserialize)]
+    struct Saved {
+        #[serde(default)]
+        head_sha: String,
+    }
+    let prefix = review_key(owner, repo, "");
+    Ok(queries::get_settings_with_prefix(conn, &prefix)?
+        .into_iter()
+        .filter_map(|(key, json)| {
+            let number = key.strip_prefix(&prefix)?.parse().ok()?;
+            Some((number, serde_json::from_str::<Saved>(&json).ok()?.head_sha))
+        })
+        .collect())
+}
+
+pub async fn save(s: &AppState, key: &str, review: &Review) -> Result<(), String> {
+    let json = serde_json::to_string(review).map_err(|e| e.to_string())?;
+    queries::set_setting(s.cache.lock().await.conn(), key, &json).map_err(|e| e.to_string())
+}
+
+/// The CLI, model and effort picked in the AI tab (same setting keys); else the first installed CLI and its defaults.
+pub async fn saved_choice(s: &AppState) -> Result<Choice, String> {
+    let installed = agent::installed();
+    let get = |key: String| async move {
+        queries::get_setting(s.cache.lock().await.conn(), &key).map(Option::unwrap_or_default).map_err(|e| e.to_string())
+    };
+    let preferred = Backend::parse(&get("ai-backend".into()).await?).filter(|b| installed.contains(b));
+    let backend = preferred
+        .or(installed.first().copied())
+        .ok_or("Install Claude Code or Codex and sign in to use AI review.")?;
+    let name = backend.executable();
+    let (model, effort) = (get(format!("ai-model:{name}")).await?, get(format!("ai-effort:{name}")).await?);
+    // Blocking: the Codex model list comes from its CLI.
+    let picked = tokio::task::spawn_blocking(move || agent::pick(&agent::models(backend), &model, &effort));
+    let (model, effort) = picked.await.map_err(|e| e.to_string())?;
+    let some = |s: String| (!s.is_empty()).then_some(s);
+    Ok(Choice { backend, model: some(model), effort: some(effort) })
+}
+
+/// Review the latest commit of a PR that is not open on screen, and save the review.
+pub async fn review_pr(s: &AppState, owner: &str, repo: &str, number: u64) -> Result<Review, String> {
+    let choice = saved_choice(s).await?;
+    let (pr, files, standards) = {
+        let p = s.provider().await?;
+        let (pr, files) = tokio::join!(p.get_pull_request(owner, repo, number), fetch_pr_files(&*p, owner, repo, number));
+        let (pr, files) = (pr.map_err(|e| e.to_string())?, files?);
+        let standards = standards(&*p, owner, repo, &pr.base_sha).await;
+        (pr, files, standards)
+    };
+    let body = pr.body.unwrap_or_default();
+    let review = run(choice, pr.head_sha, &pr.title, &body, standards, &files).await?;
+    save(s, &review_key(owner, repo, number), &review).await?;
+    Ok(review)
+}
+
 pub async fn run(
     choice: Choice, head_sha: String, title: &str, body: &str, standards: StandardsInput, files: &[ProcessedFile],
 ) -> Result<Review, String> {
@@ -448,6 +514,20 @@ mod tests {
         assert_eq!(review.comments[0].axis, "bug");
         assert_eq!(review.comments[0].rule, "AGENTS.md: no silent fallback");
         assert!(review.standards_status.is_empty());
+    }
+
+    #[test]
+    fn reviewed_heads_reads_only_this_repo() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)", []).unwrap();
+        let review = |head: &str| json!({"head_sha": head, "summary": "s"}).to_string();
+        queries::set_setting(&conn, &review_key("o", "a_b", 1), &review("abc")).unwrap();
+        queries::set_setting(&conn, &review_key("o", "a_b", 2), "not json").unwrap();
+        // `_` would match any character with LIKE.
+        queries::set_setting(&conn, &review_key("o", "axb", 3), &review("def")).unwrap();
+        queries::set_setting(&conn, &review_key("o", "a_b2", 4), &review("ghi")).unwrap();
+        let heads = reviewed_heads(&conn, "o", "a_b").unwrap();
+        assert_eq!(heads, HashMap::from([(1, "abc".to_string())]));
     }
 
     #[test]

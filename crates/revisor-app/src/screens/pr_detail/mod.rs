@@ -303,7 +303,7 @@ impl PrDetailScreen {
                     .on_click(move |_, _, cx| cx.open_url(&url))
             }))
             .children(model.pr.as_ref().map(|_| {
-                let busy = self.ai.read(cx).busy;
+                let busy = self.ai.read(cx).busy(cx);
                 Button::new("ai-review")
                     .small()
                     .ghost()
@@ -311,7 +311,7 @@ impl PrDetailScreen {
                     .loading(busy)
                     .disabled(model.files_loading)
                     .tooltip("Recap and suggested comments from Claude Code or Codex")
-                    .on_click(cx.listener(|this, _, window, cx| this.ai_review(window, cx)))
+                    .on_click(cx.listener(|this, _, _, cx| this.ai_review(cx)))
             }))
             .children(model.pr.as_ref().map(|_| {
                 let count = model.pending_count();
@@ -339,11 +339,11 @@ impl PrDetailScreen {
     }
 
     /// Show the AI tab; run a review unless one for this commit exists or is running.
-    fn ai_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn ai_review(&mut self, cx: &mut Context<Self>) {
         self.tab = SidebarTab::Ai;
         self.sidebar_open = true;
         if !self.ai.read(cx).is_current(cx) {
-            self.ai.update(cx, |ai, cx| ai.start(window, cx));
+            self.ai.update(cx, |ai, cx| ai.start(cx));
         }
         cx.notify();
     }

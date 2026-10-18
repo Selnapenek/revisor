@@ -133,6 +133,14 @@ fn effort_label(id: &str) -> String {
     }
 }
 
+/// `model` and `effort` when `models` offers them; else the first model and its default effort,
+/// so the pickers always show what will run.
+pub fn pick(models: &[Model], model: &str, effort: &str) -> (String, String) {
+    let Some(model) = models.iter().find(|m| m.id == model).or(models.first()) else { return (String::new(), effort.into()) };
+    let effort = if model.efforts.iter().any(|e| e.id == effort) { effort.into() } else { model.default_effort.clone() };
+    (model.id.clone(), effort)
+}
+
 /// Models the CLI offers, default first. Blocking for Codex: reads its model catalog.
 pub fn models(backend: Backend) -> Vec<Model> {
     match backend {
@@ -311,6 +319,15 @@ mod tests {
         let efforts: Vec<_> = models[0].efforts.iter().map(|e| (e.label.as_str(), e.description.as_str())).collect();
         assert_eq!(efforts, [("Low", "Fast"), ("Extra high", "")]);
         assert!(codex_models(b"not json").is_empty());
+    }
+
+    #[test]
+    fn pick_keeps_offered_choice_or_falls_back_to_defaults() {
+        let models = models(Backend::Claude);
+        assert_eq!(pick(&models, "claude-sonnet-5-5", "low"), ("claude-sonnet-5-5".into(), "low".into()));
+        assert_eq!(pick(&models, "gone", "low"), ("claude-opus-5-5".into(), "low".into()));
+        assert_eq!(pick(&models, "claude-sonnet-5-5", "ultra"), ("claude-sonnet-5-5".into(), "high".into()));
+        assert_eq!(pick(&[], "", "low"), (String::new(), "low".into()));
     }
 
     #[test]

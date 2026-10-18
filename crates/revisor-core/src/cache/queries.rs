@@ -20,6 +20,16 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
+/// Settings whose key starts with `prefix`. `substr`, not `LIKE`: names may contain `_` and `%`.
+pub fn get_settings_with_prefix(conn: &Connection, prefix: &str) -> Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT key, value FROM settings WHERE substr(key, 1, length(?1)) = ?1")?;
+    let rows = stmt
+        .query_map(params![prefix], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("Failed to read settings")?;
+    Ok(rows)
+}
+
 // --- Saved Repos ---
 
 pub fn get_saved_repos(conn: &Connection) -> Result<Vec<(String, String)>> {

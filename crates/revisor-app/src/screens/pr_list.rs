@@ -1,6 +1,7 @@
 //! Pull requests of one repository: state tabs, API search, advanced filters, infinite scroll,
-//! keyboard selection.
+//! keyboard selection, background AI reviews.
 
+use crate::ai_runs::{self, Finished};
 use crate::app::{self, Route};
 use crate::{backend, theme};
 use gpui_kit::component::{
@@ -17,6 +18,7 @@ use gpui_kit::component::{
     *,
 };
 use gpui_kit::{prelude::*, *};
+use revisor_core::ai_review;
 use revisor_core::cache::queries;
 use revisor_core::pr_filters::{self, REVIEW_REQUESTED_ME, REVIEW_STATUS_OPTIONS};
 use revisor_core::pr_list_cache::{PrListCache, PrListQuery, PrListSnapshot};
@@ -59,6 +61,8 @@ pub struct PrListScreen {
     total_count: Option<u64>,
     /// PR number to when the user last had it open.
     views: HashMap<u64, String>,
+    /// PR number to the head commit of its saved AI review.
+    ai_heads: HashMap<u64, String>,
     /// Indexes into the loaded API page, refreshed on render.
     visible: Vec<usize>,
     /// Number of the PR picked with the arrow keys; survives filtering and paging.
@@ -106,6 +110,16 @@ impl PrListScreen {
             }
         }));
 
+        let runs = ai_runs::runs(cx);
+        subscriptions.push(cx.observe(&runs, |_, _, cx| cx.notify()));
+        let prefix = ai_review::review_key(&owner, &repo, "");
+        subscriptions.push(cx.subscribe(&runs, move |this, _, event: &Finished, _| {
+            let number = event.key.strip_prefix(&prefix).and_then(|n| n.parse().ok());
+            if let (Some(number), Ok(review)) = (number, &event.result) {
+                this.ai_heads.insert(number, review.head_sha.clone());
+            }
+        }));
+
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         // A focused input went away (filter popover closed): keep the arrow keys working.
@@ -144,6 +158,7 @@ impl PrListScreen {
             cache: PrListCache::default(),
             total_count: None,
             views: HashMap::new(),
+            ai_heads: HashMap::new(),
             visible: Vec::new(),
             selected: None,
             focus,
@@ -208,16 +223,19 @@ impl PrListScreen {
                 let p = s.provider().await?;
                 let result = p.search_pull_requests(&owner, &repo, state, &filters, query.trim(), page, PER_PAGE).await
                 .map_err(backend::err)?;
-                // Views are non-critical: on failure every PR shows as new.
-                let views = queries::get_pr_views(s.cache.lock().await.conn(), &owner, &repo).unwrap_or_default();
-                Ok((result, views))
+                // Views and AI reviews are non-critical: on failure every PR shows as new and not reviewed.
+                let db = s.cache.lock().await;
+                let views = queries::get_pr_views(db.conn(), &owner, &repo).unwrap_or_default();
+                let ai_heads = ai_review::reviewed_heads(db.conn(), &owner, &repo).unwrap_or_default();
+                Ok((result, views, ai_heads))
             },
             move |this, result, window, cx| {
                 this.loading = false;
                 let refreshing = std::mem::take(&mut this.refreshing);
                 match result {
-                    Ok((result, views)) => {
+                    Ok((result, views, ai_heads)) => {
                         this.views = views;
+                        this.ai_heads = ai_heads;
                         pr_filters::merge_users(
                             &mut this.authors,
                             result.items.iter().map(|pr| PrUser {
@@ -291,6 +309,19 @@ impl PrListScreen {
             let number = self.prs[self.visible[pos]].number;
             app::navigate(Route::PrDetail { owner: self.owner.clone(), repo: self.repo.clone(), number }, window, cx);
         }
+    }
+
+    /// Start an AI review of PR `number` in the background, or stop the one that runs.
+    fn toggle_ai(&mut self, number: u64, cx: &mut Context<Self>) {
+        let (owner, repo) = (self.owner.to_string(), self.repo.to_string());
+        let key = ai_review::review_key(&owner, &repo, number);
+        ai_runs::runs(cx).update(cx, |runs, cx| {
+            if runs.is_running(&key) {
+                runs.cancel(&key, cx);
+            } else {
+                runs.start(key, cx, move |s| async move { ai_review::review_pr(&s, &owner, &repo, number).await });
+            }
+        });
     }
 
     fn select_state(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -491,10 +522,33 @@ impl PrListScreen {
             cx.defer_in(window, |this, window, cx| this.load_more(window, cx));
         }
         let theme = cx.theme();
+        let runs = ai_runs::runs(cx);
+        let runs = runs.read(cx);
         self.visible[range]
             .iter()
             .map(|&ix| {
                 let pr = &self.prs[ix];
+                let key = ai_review::review_key(&self.owner, &self.repo, pr.number);
+                let (running, failed) = (runs.is_running(&key), runs.error(&key));
+                // The list may lack the head commit when its GraphQL stats fail; then trust the saved review.
+                let current = self.ai_heads.get(&pr.number).map(|head| pr.head_sha.is_empty() || *head == pr.head_sha);
+                let ai_stamp = match (running, failed, current) {
+                    (true, ..) => Some(theme::stamp("AI reviewing", theme.primary, theme)),
+                    (_, Some(_), _) => Some(theme::stamp("AI failed", theme.danger, theme)),
+                    (_, _, Some(true)) => Some(theme::stamp("AI reviewed", theme.success, theme)),
+                    (_, _, Some(false)) => Some(theme::stamp("AI outdated", theme.warning, theme)),
+                    _ => None,
+                };
+                let ai_button = match (running, failed, current) {
+                    (true, ..) => Some(Button::new(("ai-run", pr.number)).ghost().label("Cancel AI").tooltip("Stop the AI review")),
+                    (_, Some(error), _) => Some(Button::new(("ai-run", pr.number)).outline().label("Retry AI").tooltip(error.to_string())),
+                    (_, _, Some(true)) => None,
+                    (_, _, Some(false)) => Some(Button::new(("ai-run", pr.number)).outline().label("Review new changes").tooltip("AI review of the latest commit, in the background")),
+                    _ => Some(Button::new(("ai-run", pr.number)).outline().label("AI review").tooltip("Recap and suggested comments, in the background")),
+                };
+                // Running and failed runs keep their button; others show it on hover, like the margin mark.
+                let pinned = running || failed.is_some();
+                let number = pr.number;
                 let route = Route::PrDetail { owner: self.owner.clone(), repo: self.repo.clone(), number: pr.number };
                 let hover_route = route.clone();
                 let comments = pr.comments_count + pr.review_comments_count;
@@ -544,6 +598,7 @@ impl PrListScreen {
                                     .w_full()
                                     .gap_2()
                                     .child(div().flex_1().min_w_0().text_sm().font_medium().truncate().child(pr.title.clone()))
+                                    .children(ai_stamp)
                                     .children(freshness)
                                     .child(theme::pr_state_stamp(pr.merged_at.is_some(), &pr.state, pr.draft, cx)),
                             )
@@ -590,6 +645,16 @@ impl PrListScreen {
                                     ),
                             ),
                     )
+                    .children(ai_button.map(|button| {
+                        div()
+                            .flex_shrink_0()
+                            .ml_3()
+                            .when(!selected && !pinned, |el| el.invisible().group_hover(ROW, |s| s.visible()))
+                            .child(button.xsmall().on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.toggle_ai(number, cx);
+                            })))
+                    }))
             })
             .collect()
     }

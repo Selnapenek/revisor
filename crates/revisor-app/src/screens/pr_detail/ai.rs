@@ -2,6 +2,7 @@
 //! and suggested comments; each one opens a prefilled comment form on its line. Nothing is posted by itself.
 
 use super::state::{PrEvent, PrModel, ScrollTarget};
+use crate::ai_runs::{self, Finished};
 use crate::{backend, theme};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
@@ -30,34 +31,25 @@ impl Agent {
         self.models.iter().find(|m| m.id == self.model)
     }
 
-    /// Replace a missing or unknown choice with the first model and that model's default effort,
-    /// so the pickers always show what will run.
     fn normalize(&mut self) {
-        if self.current().is_none() {
-            self.model = self.models.first().map(|m| m.id.clone()).unwrap_or_default();
-        }
-        if let Some(model) = self.current().filter(|m| !m.efforts.iter().any(|e| e.id == self.effort)) {
-            self.effort = model.default_effort.clone();
-        }
+        (self.model, self.effort) = agent::pick(&self.models, &self.model, &self.effort);
     }
 }
 
 pub struct AiPanel {
     model: Entity<PrModel>,
+    /// `ai_review::review_key` of this PR; the run itself lives in `ai_runs`.
+    key: String,
     agents: Vec<Agent>,
     selected: usize,
     review: Option<Review>,
-    pub busy: bool,
+    /// No CLI to run; run failures come from `ai_runs`.
     error: Option<String>,
     /// Indexes of comments the user dismissed or turned into a draft.
     done: HashSet<usize>,
-    _task: Task<()>,
+    _load: Task<()>,
     _agents_load: Task<()>,
-}
-
-fn setting_key(m: &PrModel) -> String {
-    // v5: the full base-commit rule catalog fits the bounded review input.
-    format!("ai-review-v5:{}/{}#{}", m.owner, m.repo, m.number)
+    _subscriptions: Vec<Subscription>,
 }
 
 fn short(sha: &str) -> &str {
@@ -66,11 +58,13 @@ fn short(sha: &str) -> &str {
 
 impl AiPanel {
     pub fn new(model: Entity<PrModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let key = setting_key(model.read(cx));
+        let m = model.read(cx);
+        let key = ai_review::review_key(&m.owner, &m.repo, m.number);
+        let saved_key = key.clone();
         let load = backend::spawn(
             window,
             cx,
-            move |s| async move { queries::get_setting(s.cache.lock().await.conn(), &key).map_err(backend::err) },
+            move |s| async move { queries::get_setting(s.cache.lock().await.conn(), &saved_key).map_err(backend::err) },
             |this: &mut Self, result, _, cx| {
                 if this.review.is_none() {
                     this.review = result.ok().flatten().and_then(|json| serde_json::from_str(&json).ok());
@@ -79,16 +73,28 @@ impl AiPanel {
             },
         );
         let agents_load = Self::load_agents(window, cx);
+        let runs = ai_runs::runs(cx);
+        // A run started here or from the PR list may finish while this panel exists.
+        let subscriptions = vec![
+            cx.observe(&runs, |_, _, cx| cx.notify()),
+            cx.subscribe(&runs, |this, _, event: &Finished, _| {
+                if let (true, Ok(review)) = (event.key == this.key, &event.result) {
+                    this.review = Some(review.clone());
+                    this.done.clear();
+                }
+            }),
+        ];
         Self {
             model,
+            key,
             agents: Vec::new(),
             selected: 0,
             review: None,
-            busy: false,
             error: None,
             done: HashSet::new(),
-            _task: load,
+            _load: load,
             _agents_load: agents_load,
+            _subscriptions: subscriptions,
         }
     }
 
@@ -167,56 +173,43 @@ impl AiPanel {
         }
     }
 
+    pub fn busy(&self, cx: &App) -> bool {
+        ai_runs::runs(cx).read(cx).is_running(&self.key)
+    }
+
     /// The saved review is for the commit on screen.
     pub fn is_current(&self, cx: &App) -> bool {
         self.review.as_ref().is_some_and(|r| self.model.read(cx).head_sha() == Some(r.head_sha.as_str()))
     }
 
-    pub fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn start(&mut self, cx: &mut Context<Self>) {
         let m = self.model.read(cx);
         let (Some(pr), Some(head)) = (m.pr.as_ref(), m.head_sha()) else { return };
-        if self.busy || m.files_loading {
+        if self.busy(cx) || m.files_loading {
             return;
         }
         let (title, body, head) = (pr.title.clone(), pr.body.clone().unwrap_or_default(), head.to_string());
         let (owner, repo, base) = (m.owner.to_string(), m.repo.to_string(), pr.base_sha.clone());
-        let (files, key) = (m.files.clone(), setting_key(m));
+        let (files, key) = (m.files.clone(), self.key.clone());
         let Some(choice) = self.choice() else {
             self.error = Some("Install Claude Code or Codex and sign in to use AI review.".into());
             cx.notify();
             return;
         };
-        self.busy = true;
         self.error = None;
-        cx.notify();
-        let task = backend::call_cancellable(cx, move |s| async move {
-            let standards = ai_review::standards(&*s.provider().await?, &owner, &repo, &base).await;
-            let review = ai_review::run(choice, head, &title, &body, standards, &files).await?;
-            let json = serde_json::to_string(&review).map_err(backend::err)?;
-            queries::set_setting(s.cache.lock().await.conn(), &key, &json).map_err(backend::err)?;
-            Ok(review)
-        });
-        self._task = cx.spawn_in(window, async move |this, cx| {
-            let result = task.await;
-            this.update(cx, |this, cx| {
-                this.busy = false;
-                match result {
-                    Ok(review) => {
-                        this.review = Some(review);
-                        this.done.clear();
-                    }
-                    Err(e) => this.error = Some(e),
-                }
-                cx.notify();
+        ai_runs::runs(cx).update(cx, |runs, cx| {
+            runs.start(key.clone(), cx, move |s| async move {
+                let standards = ai_review::standards(&*s.provider().await?, &owner, &repo, &base).await;
+                let review = ai_review::run(choice, head, &title, &body, standards, &files).await?;
+                ai_review::save(&s, &key, &review).await?;
+                Ok(review)
             })
-            .ok();
         });
     }
 
     fn cancel(&mut self, cx: &mut Context<Self>) {
-        self._task = Task::ready(());
-        self.busy = false;
-        cx.notify();
+        let key = self.key.clone();
+        ai_runs::runs(cx).update(cx, |runs, cx| runs.cancel(&key, cx));
     }
 
     fn draft(&mut self, index: usize, comment: &Comment, cx: &mut Context<Self>) {
@@ -244,7 +237,7 @@ impl AiPanel {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let entity = cx.entity().downgrade();
-        Button::new(id).xsmall().outline().label(label).dropdown_caret(true).disabled(self.busy).dropdown_menu(
+        Button::new(id).xsmall().outline().label(label).dropdown_caret(true).disabled(self.busy(cx)).dropdown_menu(
             move |menu, _, _| {
                 options.iter().fold(menu, |menu, (value, label, detail)| {
                     let (entity, value) = (entity.clone(), value.clone());
@@ -478,6 +471,8 @@ impl AiPanel {
 
 impl Render for AiPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let busy = self.busy(cx);
+        let error = self.error.clone().or_else(|| ai_runs::runs(cx).read(cx).error(&self.key).map(String::from));
         let theme = cx.theme();
         let files_loading = self.model.read(cx).files_loading;
         let label = match (&self.review, self.is_current(cx)) {
@@ -495,12 +490,12 @@ impl Render for AiPanel {
                 Button::new("ai-run")
                     .small()
                     .primary()
-                    .label(if self.busy { "Reviewing…" } else { label })
-                    .loading(self.busy)
-                    .disabled(self.busy || files_loading)
-                    .on_click(cx.listener(|this, _, window, cx| this.start(window, cx))),
+                    .label(if busy { "Reviewing…" } else { label })
+                    .loading(busy)
+                    .disabled(busy || files_loading)
+                    .on_click(cx.listener(|this, _, _, cx| this.start(cx))),
             )
-            .when(self.busy, |el| {
+            .when(busy, |el| {
                 el.child(
                     Button::new("ai-cancel")
                         .small()
@@ -513,7 +508,7 @@ impl Render for AiPanel {
             .size_full()
             .text_xs()
             .child(actions)
-            .children(self.error.clone().map(|e| div().px_3().pt_3().text_color(theme.danger).child(e)))
+            .children(error.map(|e| div().px_3().pt_3().text_color(theme.danger).child(e)))
             .child(
                 v_flex()
                     .id("ai-body")

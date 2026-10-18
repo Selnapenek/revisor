@@ -1,3 +1,4 @@
+mod ai_runs;
 mod app;
 mod appearance;
 mod backend;
@@ -53,6 +54,7 @@ fn main() {
             let registry = ThemeRegistry::global_mut(cx);
             registry.load_themes_from_str(include_str!("theme.json")).expect("theme.json is valid");
             backend::init(cx);
+            ai_runs::init(cx);
             appearance::init(cx);
             screens::pr_detail::init(cx);
             screens::pr_list::init(cx);
