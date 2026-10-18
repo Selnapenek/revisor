@@ -15,15 +15,13 @@ mod syntax;
 pub mod state;
 
 use crate::app;
-use crate::{backend, experimental, theme, video};
+use crate::{backend, experimental, theme};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     kbd::Kbd,
     resizable::{h_resizable, resizable_panel},
     spinner::Spinner,
     tab::{Tab, TabBar},
-    scroll::ScrollableElement as _,
-    text::TextView,
     *,
 };
 use gpui_kit::{prelude::*, *};
@@ -57,7 +55,6 @@ pub(crate) const CONTEXT: &str = "PrDetail";
 const NOT_TYPING: &str = "PrDetail && !Input";
 const SIDEBAR_WIDTH_KEY: &str = "sidebar-width";
 const SIDEBAR_DEFAULT: f32 = 260.;
-const DESCRIPTION_WIDTH: f32 = 340.;
 
 pub fn init(cx: &mut App) {
     markdown_editor::init(cx);
@@ -137,9 +134,9 @@ pub fn open_shortcuts(window: &mut Window, cx: &mut App) {
 
 #[derive(Clone, Copy, PartialEq)]
 enum SidebarTab {
+    Overview,
     Files,
     Conversations,
-    Ai,
     Semantic,
 }
 
@@ -148,7 +145,6 @@ pub struct PrDetailScreen {
     tab: SidebarTab,
     sidebar_width: Option<Pixels>,
     sidebar_open: bool,
-    description_open: bool,
     focus: FocusHandle,
     files: Entity<files::FilesPanel>,
     conversations: Entity<conversations::ConversationsPanel>,
@@ -219,10 +215,9 @@ impl PrDetailScreen {
                 cx.on_release(move |_, cx| mark_viewed(owner.to_string(), repo.to_string(), number, cx)),
             ],
             model,
-            tab: SidebarTab::Files,
+            tab: SidebarTab::Overview,
             sidebar_width: Some(px(SIDEBAR_DEFAULT)),
             sidebar_open: true,
-            description_open: true,
             focus,
             files,
             conversations,
@@ -329,24 +324,11 @@ impl PrDetailScreen {
                 };
                 button.on_click(cx.listener(|this, _, window, cx| this.open_review(window, cx)))
             }))
-            .children(model.pr.as_ref().map(|pr| {
-                let has_body = pr.body.as_deref().is_some_and(|b| !b.trim().is_empty());
-                Button::new("description-toggle")
-                    .ghost()
-                    .small()
-                    .label(if has_body { "Description" } else { "No description" })
-                    .selected(has_body && self.description_open)
-                    .disabled(!has_body)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.description_open = !this.description_open;
-                        cx.notify();
-                    }))
-            }))
     }
 
-    /// Show the AI tab; run a review unless one for this commit exists or is running.
+    /// Show the Overview tab; run a review unless one for this commit exists or is running.
     fn ai_review(&mut self, cx: &mut Context<Self>) {
-        self.tab = SidebarTab::Ai;
+        self.tab = SidebarTab::Overview;
         self.sidebar_open = true;
         if !self.ai.read(cx).is_current(cx) {
             self.ai.update(cx, |ai, cx| ai.start(cx));
@@ -357,21 +339,6 @@ impl PrDetailScreen {
     fn open_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let panel = cx.new(|cx| review::ReviewPanel::new(self.model.clone(), window, cx));
         window.open_dialog(cx, move |dialog, _, _| dialog.title("Finish your review").w(px(520.)).child(panel.clone()));
-    }
-
-    /// PR body for the right sidebar; `None` when the PR has no description.
-    fn description(&self, cx: &Context<Self>) -> Option<impl IntoElement> {
-        let body = self.model.read(cx).pr.as_ref()?.body.clone().filter(|b| !b.trim().is_empty())?;
-        Some(
-            v_flex()
-                .id("pr-description-panel")
-                .size_full()
-                .px_4()
-                .py_3()
-                .text_sm()
-                .child(TextView::markdown("pr-description", body).plugin(video::Videos))
-                .overflow_y_scrollbar(),
-        )
     }
 
     /// Shown instead of the split when the PR failed to load.
@@ -410,12 +377,12 @@ impl PrDetailScreen {
     fn sidebar(&self, cx: &Context<Self>) -> impl IntoElement {
         let model = self.model.read(cx);
         let mut tabs = vec![
+            "Overview".to_string(),
             format!("Files {}", model.files.len()),
             format!("Conversations {}", model.conversation_count()),
-            "AI".to_string(),
         ];
         if experimental::enabled(cx) { tabs.push("Semantic".to_string()); }
-        let selected = if !experimental::enabled(cx) && self.tab == SidebarTab::Semantic { 0 } else { self.tab as usize };
+        let selected = if !experimental::enabled(cx) && self.tab == SidebarTab::Semantic { SidebarTab::Files as usize } else { self.tab as usize };
         v_flex()
             .size_full()
             .when(!model.commits.is_empty(), |el| el.child(commits::CommitSelector::new(self.model.clone())))
@@ -423,7 +390,7 @@ impl PrDetailScreen {
                 TabBar::new("sidebar-tabs")
                     .selected_index(selected)
                     .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                        let tabs = [SidebarTab::Files, SidebarTab::Conversations, SidebarTab::Ai, SidebarTab::Semantic];
+                        let tabs = [SidebarTab::Overview, SidebarTab::Files, SidebarTab::Conversations, SidebarTab::Semantic];
                         if *ix >= 3 && !experimental::enabled(cx) { return; }
                         this.tab = tabs[*ix];
                         cx.notify();
@@ -435,7 +402,7 @@ impl PrDetailScreen {
                 let view: AnyView = match self.tab {
                     SidebarTab::Files => self.files.clone().into(),
                     SidebarTab::Conversations => self.conversations.clone().into(),
-                    SidebarTab::Ai => self.ai.clone().into(),
+                    SidebarTab::Overview => self.ai.clone().into(),
                     SidebarTab::Semantic if experimental::enabled(cx) => self.semantic.clone().into(),
                     SidebarTab::Semantic => self.files.clone().into(),
                 };
@@ -449,8 +416,6 @@ impl Render for PrDetailScreen {
         let model = self.model.read(cx);
         let loading = model.loading && model.pr.is_none();
         let error = model.pr.is_none().then(|| model.error.clone()).flatten();
-        let description = self.description(cx);
-        let show_description = self.description_open && description.is_some();
         v_flex()
             .size_full()
             .key_context(CONTEXT)
@@ -501,7 +466,7 @@ impl Render for PrDetailScreen {
                             this.save_width(width, cx);
                         }
                     }))
-                    // flex_none: sized side panels keep their width when the other one toggles.
+                    // flex_none: the sidebar keeps its set width; the diff takes the rest.
                     .child(
                         resizable_panel()
                             .visible(self.sidebar_open)
@@ -513,16 +478,6 @@ impl Render for PrDetailScreen {
                     .child(resizable_panel().child(
                         div().size_full().p_1().child(theme::island(cx).child(self.diff.clone())),
                     ))
-                    .child(
-                        resizable_panel()
-                            .visible(show_description)
-                            .size(px(DESCRIPTION_WIDTH))
-                            .size_range(px(240.)..px(700.))
-                            .flex_none()
-                            .children(description.map(|body| {
-                                div().size_full().p_1().child(theme::island(cx).child(body))
-                            })),
-                    )
                     ).into_any_element(),
                 _ => h_flex()
                     .flex_1()

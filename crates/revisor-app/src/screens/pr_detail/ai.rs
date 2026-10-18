@@ -1,9 +1,10 @@
-//! AI tab: one-click review by the installed Claude Code or Codex CLI. Shows a recap of the change
-//! and suggested comments; each one opens a prefilled comment form on its line. Nothing is posted by itself.
+//! Overview tab: the PR description, then a one-click review by the installed Claude Code or Codex CLI.
+//! The review shows a recap of the change and suggested comments; each one opens a prefilled comment form
+//! on its line. Nothing is posted by itself.
 
 use super::state::{PrEvent, PrModel, ScrollTarget};
 use crate::ai_runs::{self, Finished};
-use crate::{backend, theme};
+use crate::{backend, theme, video};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     menu::{DropdownMenu as _, PopupMenuItem},
@@ -76,6 +77,7 @@ impl AiPanel {
         let runs = ai_runs::runs(cx);
         // A run started here or from the PR list may finish while this panel exists.
         let subscriptions = vec![
+            cx.observe(&model, |_, _, cx| cx.notify()),
             cx.observe(&runs, |_, _, cx| cx.notify()),
             cx.subscribe(&runs, |this, _, event: &Finished, _| {
                 if let (true, Ok(review)) = (event.key == this.key, &event.result) {
@@ -474,7 +476,13 @@ impl Render for AiPanel {
         let busy = self.busy(cx);
         let error = self.error.clone().or_else(|| ai_runs::runs(cx).read(cx).error(&self.key).map(String::from));
         let theme = cx.theme();
-        let files_loading = self.model.read(cx).files_loading;
+        let m = self.model.read(cx);
+        let files_loading = m.files_loading;
+        let body = m.pr.as_ref().and_then(|pr| pr.body.clone()).filter(|b| !b.trim().is_empty());
+        let description = match body {
+            Some(body) => div().text_sm().child(TextView::markdown("pr-description", body).plugin(video::Videos)).into_any_element(),
+            None => div().text_color(theme.muted_foreground).child("No description.").into_any_element(),
+        };
         let label = match (&self.review, self.is_current(cx)) {
             (None, _) => "Run AI review",
             (Some(_), true) => "Run again",
@@ -505,27 +513,23 @@ impl Render for AiPanel {
                 )
             }));
         v_flex()
+            .id("overview")
             .size_full()
             .text_xs()
+            .overflow_y_scrollbar()
+            .child(Self::section("Description", description, cx))
             .child(actions)
             .children(error.map(|e| div().px_3().pt_3().text_color(theme.danger).child(e)))
-            .child(
-                v_flex()
-                    .id("ai-body")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .child(match &self.review {
-                        Some(review) => self.results(review, cx).into_any_element(),
-                        None => div()
-                            .p_3()
-                            .text_color(theme.muted_foreground)
-                            .child(
-                                "Runs Claude Code or Codex with your account. The PR diff, title and description \
-                                 go to Anthropic or OpenAI. You get a recap and suggested comments; nothing is posted.",
-                            )
-                            .into_any_element(),
-                    }),
-            )
+            .child(match &self.review {
+                Some(review) => self.results(review, cx).into_any_element(),
+                None => div()
+                    .p_3()
+                    .text_color(theme.muted_foreground)
+                    .child(
+                        "Runs Claude Code or Codex with your account. The PR diff, title and description \
+                         go to Anthropic or OpenAI. You get a recap and suggested comments; nothing is posted.",
+                    )
+                    .into_any_element(),
+            })
     }
 }
