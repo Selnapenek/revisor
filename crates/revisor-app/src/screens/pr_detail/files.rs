@@ -48,7 +48,7 @@ pub struct FilesPanel {
     scroll: UniformListScrollHandle,
     /// Selection the list last scrolled to.
     scrolled_to: Option<String>,
-    related_scope: (CommitSelection, bool),
+    related_scope: (CommitSelection, bool, u64),
     related_expanded: bool,
     related_source: Option<String>,
     related_results: Vec<(String, Relation)>,
@@ -77,7 +77,7 @@ impl FilesPanel {
         // `reveal` clears filters in the model; mirror that into the inputs.
         subscriptions.push(cx.observe_in(&model, window, |this, model, window, cx| {
             let m = model.read(cx);
-            let scope = (m.selection, m.files_loading);
+            let scope = (m.selection, m.files_loading, m.files_version);
             if this.related_scope != scope {
                 this.related_scope = scope;
                 this.related_expanded = false;
@@ -113,7 +113,7 @@ impl FilesPanel {
         let focus = cx.new(|cx| FocusPanel::new(model.clone(), window, cx));
         let scope = {
             let m = model.read(cx);
-            (m.selection, m.files_loading)
+            (m.selection, m.files_loading, m.files_version)
         };
         Self {
             model,

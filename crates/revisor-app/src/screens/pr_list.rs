@@ -67,6 +67,9 @@ pub struct PrListScreen {
     page: u32,
     has_next: bool,
     loading: bool,
+    loaded: bool,
+    /// A return from PR detail refreshes saved rows without a loading indicator.
+    refreshing: bool,
     /// Page 1 failed to load; shown in place of the list.
     error: Option<SharedString>,
     scroll: UniformListScrollHandle,
@@ -140,6 +143,8 @@ impl PrListScreen {
             page: 1,
             has_next: false,
             loading: true,
+            loaded: false,
+            refreshing: false,
             error: None,
             scroll: UniformListScrollHandle::new(),
             _load: load,
@@ -148,9 +153,16 @@ impl PrListScreen {
         }
     }
 
+    pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus.focus(window, cx);
+        self.load(1, window, cx);
+        self.refreshing = self.loaded;
+    }
+
     /// Page 1 replaces the list, later pages append. Replacing `_load` drops the stale request.
     fn load(&mut self, page: u32, window: &mut Window, cx: &mut Context<Self>) {
         self.loading = true;
+        self.refreshing = false;
         let (owner, repo, state, filters) =
             (self.owner.to_string(), self.repo.to_string(), STATES[self.state], self.filters.clone());
         self._load = backend::spawn(
@@ -170,6 +182,7 @@ impl PrListScreen {
             },
             move |this, result, window, cx| {
                 this.loading = false;
+                let refreshing = std::mem::take(&mut this.refreshing);
                 match result {
                     Ok((result, views)) => {
                         this.views = views;
@@ -192,12 +205,17 @@ impl PrListScreen {
                         }
                         this.page = page;
                         this.has_next = result.has_next_page;
+                        this.loaded = true;
                         this.error = None;
+                    }
+                    Err(e) if refreshing => {
+                        window.push_notification(Notification::error(format!("Failed to refresh PRs: {e}")), cx);
                     }
                     // Page 1 replaces the list: drop rows of the previous tab/filters, show the error inline.
                     Err(e) if page == 1 => {
                         this.prs.clear();
                         this.has_next = false;
+                        this.loaded = false;
                         this.error = Some(e.into());
                     }
                     Err(e) => window.push_notification(Notification::error(format!("Failed to load more PRs: {e}")), cx),
@@ -526,7 +544,7 @@ impl PrListScreen {
     fn render_list(&self, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let body = if self.visible.is_empty() {
-            let content = if self.loading {
+            let content = if self.loading && !self.refreshing {
                 div().child(Spinner::new().large().color(theme.muted_foreground))
             } else if let Some(error) = self.error.clone() {
                 v_flex()
@@ -583,7 +601,7 @@ impl PrListScreen {
             .flex_1()
             .overflow_hidden()
             .child(div().flex_1().overflow_hidden().child(body))
-            .when(self.loading && !self.visible.is_empty(), |el| {
+            .when(self.loading && !self.refreshing && !self.visible.is_empty(), |el| {
                 el.child(div().flex().justify_center().py_2().child(Spinner::new().color(theme.muted_foreground)))
             })
     }

@@ -160,7 +160,7 @@ pub struct PrDetailScreen {
 }
 
 /// Record that the user saw this PR now; the PR list compares it with the PR's last update.
-fn mark_viewed(owner: String, repo: String, number: u64, cx: &App) {
+pub(crate) fn mark_viewed(owner: String, repo: String, number: u64, cx: &App) {
     let task = backend::call(cx, move |s| async move {
         queries::mark_pr_viewed(s.cache.lock().await.conn(), &owner, &repo, number).map_err(backend::err)
     });
@@ -168,6 +168,13 @@ fn mark_viewed(owner: String, repo: String, number: u64, cx: &App) {
 }
 
 impl PrDetailScreen {
+    pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus.focus(window, cx);
+        let model = self.model.read(cx);
+        mark_viewed(model.owner.to_string(), model.repo.to_string(), model.number, cx);
+        self.model.update(cx, |model, cx| model.reload(cx));
+    }
+
     pub fn new(
         owner: SharedString,
         repo: SharedString,
@@ -200,7 +207,7 @@ impl PrDetailScreen {
                 cx.observe(&ai, |_, _, cx| cx.notify()),
                 // A focused input went away (search closed, comment sent or cancelled): keep the shortcuts working.
                 cx.on_focus_lost(window, |this, window, cx| this.focus.focus(window, cx)),
-                // Mark again on leave: activity made while the PR was open does not count as new.
+                // Also mark when the cached screen is dropped, including app exit.
                 cx.on_release(move |_, cx| mark_viewed(owner.to_string(), repo.to_string(), number, cx)),
             ],
             model,
@@ -429,7 +436,8 @@ impl PrDetailScreen {
 impl Render for PrDetailScreen {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let model = self.model.read(cx);
-        let (loading, error) = (model.loading, model.error.clone());
+        let loading = model.loading && model.pr.is_none();
+        let error = model.pr.is_none().then(|| model.error.clone()).flatten();
         let description = self.description(cx);
         let show_description = self.description_open && description.is_some();
         v_flex()

@@ -97,6 +97,8 @@ pub struct PrModel {
     /// The PR failed to load; the screen shows it with a retry.
     pub error: Option<SharedString>,
     pub files_loading: bool,
+    /// Changes when a new file set replaces the one shown in the diff.
+    pub files_version: u64,
     pub selected: Option<String>,
     pub collapsed: HashSet<String>,
     pub diff_mode: DiffMode,
@@ -152,6 +154,7 @@ impl PrModel {
             loading: true,
             error: None,
             files_loading: false,
+            files_version: 0,
             selected: None,
             collapsed: HashSet::new(),
             diff_mode: DiffMode::Split,
@@ -209,6 +212,10 @@ impl PrModel {
                 this.loading = false;
                 match result {
                     Ok((pr, files, comments, issue_comments, reviews, pending, resolutions, commits, reviewed)) => {
+                        let same_head = this.pr.as_ref().is_some_and(|old| old.head_sha == pr.head_sha);
+                        let same_revision = this.pr.as_ref().is_some_and(|old| old.head_sha == pr.head_sha && old.base_sha == pr.base_sha);
+                        let selected = same_head.then(|| this.selected.clone()).flatten();
+                        let collapsed = same_head.then(|| this.collapsed.clone());
                         this.pr = Some(pr);
                         this.comments = comments;
                         this.issue_comments = issue_comments;
@@ -218,10 +225,19 @@ impl PrModel {
                         this.commits = commits;
                         this.reviewed = reviewed.into_iter().collect();
                         this.rebuild_threads();
-                        this.set_files(files, cx);
-                        // Files already viewed in an earlier session start collapsed.
-                        this.collapsed = this.reviewed.clone();
+                        if !same_revision {
+                            this.selection = CommitSelection::All;
+                            this.all_files = None;
+                            this.diff_loading.clear();
+                            this.set_files(files, cx);
+                            if let Some(path) = selected.filter(|path| this.files.iter().any(|file| &file.filename == path)) {
+                                this.selected = Some(path);
+                            }
+                            // Keep local expansion choices when the PR head did not change.
+                            this.collapsed = collapsed.unwrap_or_else(|| this.reviewed.clone());
+                        }
                     }
+                    Err(e) if this.pr.is_some() => notify_error(format!("Failed to refresh PR: {e}"), cx),
                     Err(e) => this.error = Some(e.into()),
                 }
                 cx.notify();
@@ -232,6 +248,7 @@ impl PrModel {
     }
 
     fn set_files(&mut self, files: Vec<ProcessedFile>, cx: &mut Context<Self>) {
+        self.files_version += 1;
         self.selected = files.first().map(|f| f.filename.clone());
         // Recorded rows and load failures belong to the old file set.
         self.history.clear();

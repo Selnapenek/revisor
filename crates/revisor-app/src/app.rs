@@ -8,12 +8,14 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     kbd::Kbd,
     notification::Notification,
+    popover::Popover,
     spinner::Spinner,
     *,
 };
 use gpui_kit::{prelude::*, *};
 use revisor_core::provider::types::{ProviderUser, RateLimitInfo};
-use std::time::Duration;
+use revisor_core::ai_usage::{self, Usage, WindowUsage};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 actions!(revisor_nav, [GoBack, OpenSettings, ToggleTips]);
 
@@ -109,6 +111,7 @@ pub fn set_user(user: Option<ProviderUser>, window: &mut Window, cx: &mut App) {
         let route = if user.is_some() { Route::Repos } else { Route::Auth };
         root.user = user;
         root.go(route, window, cx);
+        if root.user.is_some() { root.refresh_usage(window, cx); } else { root.usage = None; }
     })
     .ok();
 }
@@ -136,8 +139,11 @@ pub fn sign_out(window: &mut Window, cx: &mut App) {
 pub struct AppRoot {
     route: Route,
     screen: Option<AnyView>,
+    pr_list: Option<(SharedString, SharedString, Entity<PrListScreen>)>,
+    pr_details: Vec<(Route, Entity<PrDetailScreen>)>,
     user: Option<ProviderUser>,
     rate: Option<RateLimitInfo>,
+    usage: Option<Vec<Usage>>,
     nav: usize,
     _poll: Task<()>,
     _restore: Task<()>,
@@ -154,45 +160,97 @@ impl AppRoot {
                 this.user = result.ok().flatten();
                 let route = if this.user.is_some() { Route::Repos } else { Route::Auth };
                 this.go(route, window, cx);
+                if this.user.is_some() { this.refresh_usage(window, cx); }
             },
         );
-        let poll = cx.spawn(async move |this, cx| loop {
-            let fut = this.update(cx, |this, cx| {
-                this.user.is_some().then(|| {
-                    backend::call(cx, |s| async move { Ok(s.provider().await?.rate_limit_status()) })
-                })
-            });
-            match fut {
-                Err(_) => return,
-                Ok(Some(fut)) => {
-                    if let Ok(info) = fut.await {
-                        this.update(cx, |this, cx| {
-                            this.rate = Some(info);
-                            cx.notify();
-                        })
-                        .ok();
+        let poll = cx.spawn(async move |this, cx| {
+            let mut ticks = 0u32;
+            loop {
+                let fut = this.update(cx, |this, cx| {
+                    this.user.is_some().then(|| {
+                        backend::call(cx, |s| async move { Ok(s.provider().await?.rate_limit_status()) })
+                    })
+                });
+                match fut {
+                    Err(_) => return,
+                    Ok(Some(fut)) => {
+                        if let Ok(info) = fut.await {
+                            this.update(cx, |this, cx| {
+                                this.rate = Some(info);
+                                cx.notify();
+                            })
+                            .ok();
+                        }
+                        if ticks > 0 && ticks.is_multiple_of(10) {
+                            let usage = ai_usage::installed_usage().await;
+                            this.update(cx, |this, cx| { if this.user.is_some() { this.usage = Some(usage); cx.notify(); } }).ok();
+                        }
                     }
+                    Ok(None) => {}
                 }
-                Ok(None) => {}
+                cx.background_executor().timer(Duration::from_secs(30)).await;
+                ticks = ticks.wrapping_add(1);
             }
-            cx.background_executor().timer(Duration::from_secs(30)).await;
         });
-        Self { route: Route::Auth, screen: None, user: None, rate: None, nav: 0, _poll: poll, _restore: restore }
+        Self { route: Route::Auth, screen: None, pr_list: None, pr_details: Vec::new(), user: None, rate: None, usage: None, nav: 0, _poll: poll, _restore: restore }
+    }
+
+    fn refresh_usage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let task = backend::call(cx, |_| async { Ok(ai_usage::installed_usage().await) });
+        window.spawn(cx, async move |cx| {
+            let result = task.await;
+            cx.update(|_, cx| {
+                let root = cx.global::<Nav>().0.clone();
+                root.update(cx, |this, cx| {
+                    if let Ok(usage) = result { if this.user.is_some() { this.usage = Some(usage); cx.notify(); } }
+                }).ok();
+            }).ok();
+        }).detach();
     }
 
     fn go(&mut self, route: Route, window: &mut Window, cx: &mut Context<Self>) {
         if self.screen.is_some() && route == self.route {
             return;
         }
+        if let Route::PrDetail { owner, repo, number } = &self.route {
+            pr_detail::mark_viewed(owner.to_string(), repo.to_string(), *number, cx);
+        }
         self.screen = Some(match &route {
-            Route::Auth => cx.new(|cx| AuthScreen::new(window, cx)).into(),
+            Route::Auth => {
+                self.pr_list = None;
+                self.pr_details.clear();
+                cx.new(|cx| AuthScreen::new(window, cx)).into()
+            }
             Route::Repos => cx.new(|cx| ReposScreen::new(window, cx)).into(),
             Route::PrList { owner, repo } => {
-                cx.new(|cx| PrListScreen::new(owner.clone(), repo.clone(), window, cx)).into()
+                let cached = self.pr_list.as_ref()
+                    .filter(|(cached_owner, cached_repo, _)| cached_owner == owner && cached_repo == repo)
+                    .map(|(_, _, list)| list.clone());
+                if let Some(list) = cached {
+                    list.update(cx, |list, cx| list.refresh(window, cx));
+                    list.into()
+                } else {
+                    let list = cx.new(|cx| PrListScreen::new(owner.clone(), repo.clone(), window, cx));
+                    self.pr_list = Some((owner.clone(), repo.clone(), list.clone()));
+                    list.into()
+                }
             }
             Route::PrDetail { owner, repo, number } => {
-                let viewer = self.user.as_ref().map(|u| u.login.clone());
-                cx.new(|cx| PrDetailScreen::new(owner.clone(), repo.clone(), *number, viewer, window, cx)).into()
+                if let Some(index) = self.pr_details.iter().position(|(key, _)| key == &route) {
+                    let entry = self.pr_details.remove(index);
+                    entry.1.update(cx, |detail, cx| detail.refresh(window, cx));
+                    let detail = entry.1.clone();
+                    self.pr_details.push(entry);
+                    detail.into()
+                } else {
+                    let viewer = self.user.as_ref().map(|u| u.login.clone());
+                    let detail = cx.new(|cx| PrDetailScreen::new(owner.clone(), repo.clone(), *number, viewer, window, cx));
+                    if self.pr_details.len() == 5 {
+                        self.pr_details.remove(0);
+                    }
+                    self.pr_details.push((route.clone(), detail.clone()));
+                    detail.into()
+                }
             }
             Route::Settings { .. } => cx.new(|cx| SettingsScreen::new(window, cx)).into(),
         });
@@ -249,6 +307,7 @@ impl AppRoot {
                 div().flex_shrink_0().text_color(rate_color).child(format!("— API {}/{}", thousands(r.remaining), thousands(r.limit)))
             }))
             .children(tips)
+            .when(self.user.is_some(), |el| el.child(self.usage_popover(cx)))
             .children(self.user.as_ref().map(|u| {
                 h_flex()
                     .flex_shrink_0()
@@ -276,6 +335,47 @@ impl AppRoot {
                     .on_click(|_, window, cx| open_settings(window, cx)),
             )
     }
+
+    fn usage_popover(&self, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let muted = theme.muted_foreground;
+        let rows = self.usage.as_ref().map(|entries| entries.iter().map(|entry| {
+            let heading = entry.plan.as_ref().map_or_else(|| entry.backend.label().to_string(), |plan| format!("{} · {plan}", entry.backend.label()));
+            v_flex()
+                .gap_1()
+                .py_2()
+                .child(div().text_color(theme.foreground).text_sm().child(heading))
+                .children(entry.session.as_ref().map(|window| usage_window("Session", window, muted, theme.foreground)))
+                .children(entry.weekly.as_ref().map(|window| usage_window("Weekly", window, muted, theme.foreground)))
+                .children(entry.error.as_ref().map(|error| div().text_xs().text_color(muted).child(error.clone())))
+                .when(entry.session.is_none() && entry.weekly.is_none() && entry.error.is_none(), |el| {
+                    el.child(div().text_xs().text_color(muted).child("No usage data"))
+                })
+        }).collect::<Vec<_>>()).unwrap_or_default();
+        Popover::new("ai-usage")
+            .w(px(280.))
+            .anchor(Anchor::BottomRight)
+            .trigger(Button::new("ai-usage-trigger").ghost().xsmall().label("AI usage"))
+            .child(v_flex().gap_1().child(div().font_semibold().child("AI usage"))
+                .when(self.usage.is_none(), |el| el.child(div().text_xs().text_color(muted).child("Loading usage…")))
+                .when(self.usage.as_ref().is_some_and(Vec::is_empty), |el| el.child(div().text_xs().text_color(muted).child("Install and sign in to Claude Code or Codex to see usage.")))
+                .children(rows))
+    }
+}
+
+fn usage_window(label: &'static str, usage: &WindowUsage, muted: Hsla, foreground: Hsla) -> impl IntoElement {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let reset = usage.resets_at.map(|at| {
+        let left = at.saturating_sub(now);
+        if left == 0 { "resets now".to_string() }
+        else if left >= 86_400 { format!("resets in {}d {}h", left / 86_400, left % 86_400 / 3_600) }
+        else if left >= 3_600 { format!("resets in {}h {}m", left / 3_600, left % 3_600 / 60) }
+        else { format!("resets in {}m", (left / 60).max(1)) }
+    }).unwrap_or_default();
+    h_flex().gap_2().text_xs().text_color(muted)
+        .child(div().w(px(58.)).child(label))
+        .child(div().w(px(36.)).text_color(foreground).child(format!("{:.0}%", usage.used_percent)))
+        .child(reset)
 }
 
 impl Render for AppRoot {

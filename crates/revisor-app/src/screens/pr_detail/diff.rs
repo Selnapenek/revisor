@@ -126,7 +126,7 @@ pub struct DiffView {
     /// Search match index ranges by file and (old, new) line number.
     matches: HashMap<(usize, Option<u64>, Option<u64>), Range<usize>>,
     /// Changes when the file set is replaced; resets expansions and scroll.
-    files_key: (CommitSelection, bool),
+    files_key: (CommitSelection, bool, u64),
     search_open: bool,
     search: Entity<InputState>,
     /// Last row scrolled to and the list top it set; keyboard steps continue from it.
@@ -174,7 +174,7 @@ impl DiffView {
         ];
         let m = model.read(cx);
         let mut this = Self {
-            files_key: (m.selection, m.files_loading),
+            files_key: (m.selection, m.files_loading, m.files_version),
             model,
             rows: vec![],
             list,
@@ -197,7 +197,7 @@ impl DiffView {
     /// Bring local state in line with the model and rebuild the rows.
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let model = self.model.read(cx);
-        let key = (model.selection, model.files_loading);
+        let key = (model.selection, model.files_loading, model.files_version);
         let reset = key != self.files_key;
         if reset {
             self.files_key = key;
