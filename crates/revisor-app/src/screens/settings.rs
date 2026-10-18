@@ -11,6 +11,8 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::*, *};
 use revisor_core::agent::{self, Backend, Model};
 use revisor_core::cache::queries;
+use std::io::Write as _;
+use std::path::Path;
 
 // ponytail: curated lists filtered to installed fonts; a searchable picker over all fonts if people ask for more.
 const UI_FONTS: &[&str] = &["JetBrains Mono", "Inter", "IBM Plex Sans", "Helvetica Neue", "Avenir Next", "Futura", "Georgia"];
@@ -38,8 +40,8 @@ pub struct SettingsScreen {
     ai_agents: Vec<AiAgent>,
     ai_error: Option<String>,
     _ai_load: Task<()>,
+    _auth_refresh: Option<Task<()>>,
 }
-
 struct AiAgent {
     backend: Backend,
     source: Option<String>,
@@ -47,6 +49,9 @@ struct AiAgent {
     models: Vec<Model>,
     model: String,
     effort: String,
+    authenticated: Option<bool>,
+    checking_auth: bool,
+    auth_note: Option<String>,
 }
 
 impl AiAgent {
@@ -64,6 +69,34 @@ impl AiAgent {
 
 #[derive(Clone, Copy)]
 enum AiField { Model, Effort }
+
+#[cfg(target_os = "macos")]
+fn launch_login(path: &Path, backend: Backend) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let mut file = tempfile::Builder::new().prefix("revisor-login-").suffix(".command")
+        .tempfile().map_err(|error| error.to_string())?;
+    file.write_all(agent::login_script(path, backend).as_bytes()).map_err(|error| error.to_string())?;
+    file.as_file().set_permissions(std::fs::Permissions::from_mode(0o700)).map_err(|error| error.to_string())?;
+    let (_, script_path) = file.keep().map_err(|error| error.error.to_string())?;
+    let result = std::process::Command::new("/usr/bin/open").args(["-a", "Terminal"])
+        .arg(&script_path).status().map_err(|error| error.to_string());
+    match result {
+        Ok(status) if status.success() => Ok(()),
+        other => {
+            let _ = std::fs::remove_file(script_path);
+            Err(match other {
+                Ok(status) => format!("open exited with {status}"),
+                Err(error) => error,
+            })
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn launch_login(_: &Path, _: Backend) -> Result<(), String> {
+    Err("Open the CLI login command in a terminal on this system.".into())
+}
 
 impl SettingsScreen {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -83,11 +116,12 @@ impl SettingsScreen {
                 let agents = tokio::task::spawn_blocking(|| {
                     [Backend::Claude, Backend::Codex].into_iter().map(|backend| {
                         let info = agent::cli_info(backend);
-                        (backend, info, agent::models(backend))
+                        let auth = info.as_ref().and_then(|_| agent::auth_status(backend));
+                        (backend, info, agent::models(backend), auth)
                     }).collect::<Vec<_>>()
                 }).await.map_err(backend::err)?;
                 let db = state.cache.lock().await;
-                agents.into_iter().map(|(backend, info, models)| {
+                agents.into_iter().map(|(backend, info, models, authenticated)| {
                     let name = backend.executable();
                     let get = |kind| queries::get_setting(db.conn(), &format!("ai-{kind}:{name}"))
                         .map(Option::unwrap_or_default).map_err(backend::err);
@@ -98,6 +132,9 @@ impl SettingsScreen {
                         models,
                         model: get("model")?,
                         effort: get("effort")?,
+                        authenticated,
+                        checking_auth: false,
+                        auth_note: None,
                     };
                     agent.normalize();
                     Ok(agent)
@@ -111,7 +148,41 @@ impl SettingsScreen {
                 cx.notify();
             },
         );
-        Self { ui_fonts, code_fonts: fonts(CODE_FONTS), ai_agents: Vec::new(), ai_error: None, _ai_load: ai_load }
+        Self { ui_fonts, code_fonts: fonts(CODE_FONTS), ai_agents: Vec::new(), ai_error: None,
+            _ai_load: ai_load, _auth_refresh: None }
+    }
+
+    fn start_login(&mut self, backend: Backend, cx: &mut Context<Self>) {
+        let Some(agent) = self.ai_agents.iter_mut().find(|agent| agent.backend == backend) else { return };
+        let Some(source) = agent.source.as_deref() else { return };
+        agent.auth_note = Some(match launch_login(Path::new(source), backend) {
+            Ok(()) => "Finish signing in in Terminal, then select Check status.".into(),
+            Err(error) => format!("Could not open Terminal: {error}"),
+        });
+        cx.notify();
+    }
+
+    fn refresh_auth(&mut self, backend: Backend, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(agent) = self.ai_agents.iter_mut().find(|agent| agent.backend == backend) else { return };
+        if agent.source.is_none() || agent.checking_auth { return }
+        agent.checking_auth = true;
+        cx.notify();
+        self._auth_refresh = Some(backend::spawn(window, cx,
+            move |_| async move {
+                tokio::task::spawn_blocking(move || agent::auth_status(backend)).await.map_err(backend::err)
+            },
+            move |this: &mut Self, result, _, cx| {
+                if let Some(agent) = this.ai_agents.iter_mut().find(|agent| agent.backend == backend) {
+                    agent.checking_auth = false;
+                    agent.authenticated = result.ok().flatten();
+                    agent.auth_note = match agent.authenticated {
+                        Some(true) => None,
+                        Some(false) => Some("The CLI is not signed in yet.".into()),
+                        None => Some("Could not check the CLI login. Try again.".into()),
+                    };
+                    cx.notify();
+                }
+            }));
     }
 
     fn set_ai(&mut self, backend: Backend, field: AiField, value: SharedString, cx: &mut Context<Self>) {
@@ -145,8 +216,37 @@ impl SettingsScreen {
         };
         let version = agent.version.clone();
         let source = agent.source.clone().unwrap_or_else(|| "Install the CLI to enable AI review.".into());
+        let installed = agent.source.is_some();
+        let checking = agent.checking_auth;
+        let status = match agent.authenticated {
+            Some(true) => "Logged in",
+            Some(false) => "Not logged in",
+            None if installed => "Login status unavailable",
+            None => "Not installed",
+        };
+        let login_label = if agent.authenticated == Some(true) { "Relogin" } else { "Login" };
+        let note = agent.auth_note.clone();
+        let login_screen = cx.entity().downgrade();
+        let refresh_screen = login_screen.clone();
+        let account = SettingField::render(move |_, _, _| {
+            v_flex().gap_1()
+                .child(h_flex().gap_2().child(status).when(installed, |row| row
+                    .child(Button::new(format!("ai-login-{}", backend.executable())).small().outline().label(login_label)
+                        .disabled(checking).on_click({
+                            let screen = login_screen.clone();
+                            move |_, _, cx| { screen.update(cx, |this, cx| this.start_login(backend, cx)).ok(); }
+                        }))
+                    .child(Button::new(format!("ai-auth-refresh-{}", backend.executable())).small().ghost()
+                        .label(if checking { "Checking…" } else { "Check status" }).disabled(checking)
+                        .on_click({
+                            let screen = refresh_screen.clone();
+                            move |_, window, cx| { screen.update(cx, |this, cx| this.refresh_auth(backend, window, cx)).ok(); }
+                        }))))
+                .when_some(note.clone(), |row, note| row.child(div().text_xs().child(note)))
+        });
         let mut page = SettingPage::new(name).resettable(false).groups([
             SettingGroup::new().title("CLI source")
+                .item(SettingItem::new("Account", account))
                 .item(SettingItem::new("Version", SettingField::render(move |_, _, _| div().child(version.clone()))))
                 .item(SettingItem::new("Source", SettingField::render(move |_, _, _| div().child(source.clone())))),
         ]);

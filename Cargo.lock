@@ -7128,6 +7128,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "revisor-core",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

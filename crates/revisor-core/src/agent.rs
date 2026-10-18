@@ -65,6 +65,38 @@ pub fn cli_info(backend: Backend) -> Option<(PathBuf, String)> {
     Some((path, version))
 }
 
+/// `None` means the installed CLI did not give a usable answer.
+pub fn auth_status(backend: Backend) -> Option<bool> {
+    let path = executable_path(backend)?;
+    let args: &[&str] = match backend {
+        Backend::Claude => &["auth", "status", "--json"],
+        Backend::Codex => &["login", "status"],
+    };
+    let output = std::process::Command::new(path).args(args).output().ok()?;
+    parse_auth_status(backend, output.status.success(), &output.stdout)
+}
+
+fn parse_auth_status(backend: Backend, success: bool, stdout: &[u8]) -> Option<bool> {
+    match backend {
+        Backend::Claude => serde_json::from_slice::<Value>(stdout).ok()?["loggedIn"].as_bool(),
+        // Codex returns a failing status when there is no saved login.
+        Backend::Codex => Some(success),
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// Script opened by macOS Terminal for an interactive CLI sign-in.
+pub fn login_script(path: &Path, backend: Backend) -> String {
+    let args = match backend {
+        Backend::Claude => "auth login",
+        Backend::Codex => "login --device-auth",
+    };
+    format!("#!/bin/zsh\nrm -f -- \"$0\"\n{} {args}\nstatus=$?\nprintf '\\nReturn to Revisor and select Check status.\\n'\nif [ \"$status\" -ne 0 ]; then printf 'Login exited with status %s.\\n' \"$status\"; fi\nprintf 'Press Return to close this window. '\nread -r reply\n", shell_quote(&path.to_string_lossy()))
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Effort {
     pub id: String,
@@ -289,5 +321,23 @@ mod tests {
         let error = parse_claude(br#"{"type":"result","is_error":true,"result":"Not logged in"}"#).unwrap_err();
         assert_eq!(error, "Not logged in");
         assert!(parse_claude(br#"{"type":"result","result":"text only"}"#).is_err());
+    }
+
+    #[test]
+    fn claude_auth_status_uses_logged_in_field() {
+        assert_eq!(parse_auth_status(Backend::Claude, true, br#"{"loggedIn":true}"#), Some(true));
+        assert_eq!(parse_auth_status(Backend::Claude, true, br#"{"loggedIn":false}"#), Some(false));
+        assert_eq!(parse_auth_status(Backend::Claude, true, b"invalid"), None);
+        assert_eq!(parse_auth_status(Backend::Codex, true, b""), Some(true));
+        assert_eq!(parse_auth_status(Backend::Codex, false, b""), Some(false));
+    }
+
+    #[test]
+    fn login_script_quotes_cli_path_and_uses_device_auth_for_codex() {
+        let path = Path::new("/tmp/it's codex/bin/codex");
+        let script = login_script(path, Backend::Codex);
+        assert!(script.contains("'/tmp/it'\\''s codex/bin/codex' login --device-auth"));
+        assert!(script.contains("rm -f -- \"$0\""));
+        assert!(login_script(Path::new("/tmp/claude"), Backend::Claude).contains("'/tmp/claude' auth login"));
     }
 }
