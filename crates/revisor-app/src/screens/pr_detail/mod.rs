@@ -7,6 +7,7 @@ mod conversations;
 mod diff;
 mod files;
 mod markdown_editor;
+mod related;
 mod review;
 mod semantic;
 mod syntax;
@@ -46,6 +47,7 @@ actions!(
         PrevUnreviewed,
         ToggleViewed,
         ShowShortcuts,
+        GoToRelatedTest,
     ]
 );
 
@@ -73,6 +75,7 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-u", PrevUnreviewed, Some(NOT_TYPING)),
         KeyBinding::new("v", ToggleViewed, Some(NOT_TYPING)),
         KeyBinding::new("?", ShowShortcuts, Some(NOT_TYPING)),
+        KeyBinding::new("t", GoToRelatedTest, Some(NOT_TYPING)),
     ]);
 }
 
@@ -89,6 +92,7 @@ pub fn open_shortcuts(window: &mut Window, cx: &mut App) {
             ("", Box::new(PrevUnreviewed)),
             ("Next / previous file", Box::new(NextFile)),
             ("", Box::new(PrevFile)),
+            ("Related test or tested code", Box::new(GoToRelatedTest)),
             ("Back to previous place", Box::new(app::GoBack)),
         ]),
         ("Review", vec![
@@ -420,6 +424,11 @@ impl Render for PrDetailScreen {
                 }
             }))
             .on_action(|_: &ShowShortcuts, window, cx| open_shortcuts(window, cx))
+            .on_action(cx.listener(|this, _: &GoToRelatedTest, _, cx| {
+                if let Some(path) = files::counterpart(this.model.read(cx)) {
+                    this.model.update(cx, |m, cx| m.reveal(&path, state::ScrollTarget::File(path.clone()), cx));
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToggleViewed, _, cx| this.model.update(cx, |m, cx| m.toggle_selected_reviewed(cx))))
             .on_action(cx.listener(|this, _: &ToggleConversations, _, cx| {
                 this.tab = if this.tab == SidebarTab::Files { SidebarTab::Conversations } else { SidebarTab::Files };

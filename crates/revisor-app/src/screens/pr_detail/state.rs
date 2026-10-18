@@ -44,6 +44,7 @@ pub struct Spot {
     pub path: String,
     pub line: Option<(Side, u64)>,
     pub above: usize,
+    pub offset_in_item: Pixels,
 }
 
 /// Navigation history entries kept; older ones drop.
@@ -319,9 +320,12 @@ impl PrModel {
     /// Clear sidebar filters, open the target's file and scroll to it.
     pub fn reveal(&mut self, path: &str, target: ScrollTarget, cx: &mut Context<Self>) {
         // Open first: its jump event must reach the diff before the refilter rebuilds the rows.
-        self.open(path, target, cx);
-        if !(self.filter_query.is_empty() && self.include.is_empty() && self.exclude.is_empty()) {
+        let hidden = !self.visible.iter().any(|&i| self.files[i].filename == path);
+        self.open(path, target.clone(), cx);
+        if hidden {
             self.set_filter(String::new(), String::new(), String::new(), cx);
+            // The first jump records history. Now the target has a row to scroll to.
+            cx.emit(PrEvent::ScrollTo(target));
         }
     }
 

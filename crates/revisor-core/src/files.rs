@@ -1,6 +1,6 @@
 //! File list logic for the PR detail sidebar: glob filters, directory tree, navigation.
 
-use crate::diff::ProcessedFile;
+use crate::diff::{parser::DiffLineKind, ProcessedFile};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
@@ -251,9 +251,161 @@ pub fn find_wrapping(len: usize, current: Option<usize>, forward: bool, hit: imp
         .find(|&i| hit(i))
 }
 
+/// How a changed file relates to the file under review. Sorts strongest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Relation {
+    /// A test of the current file.
+    Test,
+    /// The code the current test file tests.
+    Source,
+    /// Same base name: `foo.h` / `foo.c`, `Card.tsx` / `Card.css`.
+    SameName,
+    /// Either file's changed lines name the other.
+    Mentions,
+    SameFolder,
+}
+
+/// Names too common to relate files by (`mod.rs`, `index.ts`); they relate within one folder only.
+const GENERIC_STEMS: &[&str] = &[
+    "index", "mod", "lib", "main", "init", "__init__", "utils", "util", "types", "app", "test", "tests", "spec",
+    "readme", "package", "cargo", "config", "setup", "style", "styles", "constants",
+];
+
+fn parent(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(dir, _)| dir)
+}
+
+/// Lowercase base name without extensions and test affixes, and whether the path is a test.
+fn name_parts(path: &str) -> (String, bool) {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    let in_test_dir = parent(path).split('/').any(|d| matches!(d, "test" | "tests" | "__tests__" | "spec" | "specs"));
+    // `glob.test.ts`, `card.spec.tsx`
+    let test_ext = name.split('.').skip(1).any(|p| p == "test" || p == "spec");
+    // A leading dot is the name itself (`.eslintrc`).
+    let base = match name.find('.') {
+        Some(i) if i > 0 => &name[..i],
+        _ => name,
+    };
+    let stripped = ["_test", "_tests", "_spec", "-test", "-spec", "Test", "Tests", "Spec"]
+        .iter()
+        .find_map(|s| base.strip_suffix(s))
+        .or_else(|| base.strip_prefix("test_"))
+        .filter(|s| !s.is_empty());
+    (stripped.unwrap_or(base).to_lowercase(), in_test_dir || test_ext || stripped.is_some())
+}
+
+/// `stem` is a whole word in an added or removed line of `file`, case-insensitively.
+fn mentions(file: &ProcessedFile, stem: &str) -> bool {
+    if stem.len() < 3 || GENERIC_STEMS.contains(&stem) {
+        return false;
+    }
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    file.diff.iter().flat_map(|d| &d.hunks).flat_map(|h| &h.lines).filter(|l| l.kind != DiffLineKind::Context).any(|l| {
+        let line = l.content.to_lowercase();
+        line.match_indices(stem).any(|(i, _)| {
+            !line[..i].chars().next_back().is_some_and(word) && !line[i + stem.len()..].chars().next().is_some_and(word)
+        })
+    })
+}
+
+/// Changed files related to `files[current]` by name, folder or mention in changed lines, strongest first.
+/// Unrelated non-test files are left out.
+// ponytail: names and changed lines only, no repository index; add symbol analysis if names miss real relations.
+pub fn related_files(files: &[ProcessedFile], current: usize) -> Vec<(usize, Relation)> {
+    let Some(cur) = files.get(current) else { return vec![] };
+    let (stem, is_test) = name_parts(&cur.filename);
+    let dir = parent(&cur.filename);
+    let mut out: Vec<(usize, Relation)> = files
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| i != current)
+        .filter_map(|(i, f)| {
+            let (s, test) = name_parts(&f.filename);
+            let same_dir = parent(&f.filename) == dir;
+            let same_stem = s == stem && (same_dir || !GENERIC_STEMS.contains(&s.as_str()));
+            let relation = match () {
+                _ if same_stem && test && !is_test => Relation::Test,
+                _ if same_stem && is_test && !test => Relation::Source,
+                _ if same_stem => Relation::SameName,
+                _ if mentions(f, &stem) || mentions(cur, &s) => Relation::Mentions,
+                _ if same_dir => Relation::SameFolder,
+                _ => return None,
+            };
+            Some((i, relation))
+        })
+        .collect();
+    out.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| files[a.0].filename.cmp(&files[b.0].filename)));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn name_parts_strip_test_affixes() {
+        assert_eq!(name_parts("src/lib/glob.test.ts"), ("glob".into(), true));
+        assert_eq!(name_parts("pkg/foo_test.go"), ("foo".into(), true));
+        assert_eq!(name_parts("tests/test_foo.py"), ("foo".into(), true));
+        assert_eq!(name_parts("src/UserCardTest.java"), ("usercard".into(), true));
+        assert_eq!(name_parts("crates/x/tests/parser.rs"), ("parser".into(), true));
+        assert_eq!(name_parts("src/latest.ts"), ("latest".into(), false));
+        assert_eq!(name_parts(".eslintrc"), (".eslintrc".into(), false));
+    }
+
+    #[test]
+    fn related_files_by_name_mention_and_folder() {
+        let mut files: Vec<_> = [
+            "src/glob.ts",
+            "src/glob.test.ts",
+            "src/other.ts",
+            "lib/caller.ts",
+            "tests/unrelated.test.ts",
+            "docs/readme.md",
+            "a/mod.rs",
+            "b/mod.rs",
+        ]
+        .map(pf)
+        .into();
+        files[3].diff = Some(crate::diff::diff_contents("", "import { glob } from '../src/glob';\nconst globby = 1;"));
+        let rel = |i| related_files(&files, i).into_iter().map(|(j, r)| (files[j].filename.as_str(), r)).collect::<Vec<_>>();
+        assert_eq!(
+            rel(0),
+            [
+                ("src/glob.test.ts", Relation::Test),
+                ("lib/caller.ts", Relation::Mentions),
+                ("src/other.ts", Relation::SameFolder),
+            ]
+        );
+        assert_eq!(rel(1)[0], ("src/glob.ts", Relation::Source));
+        assert!(rel(0).iter().all(|(p, _)| *p != "tests/unrelated.test.ts"));
+        // Generic names in different folders are not related.
+        assert!(rel(6).iter().all(|(p, _)| *p != "b/mod.rs"));
+        assert!(related_files(&files, 99).is_empty());
+        assert!(related_files(&[], 0).is_empty());
+    }
+
+    #[test]
+    fn related_files_have_stable_order_and_whole_word_mentions() {
+        let mut files: Vec<_> = ["src/widget.ts", "tests/widget.test.ts", "tests/widget.spec.ts", "b/uses.ts", "a/uses.ts", "c/near.ts"]
+            .map(pf)
+            .into();
+        files[3].diff = Some(crate::diff::diff_contents("", "widget()"));
+        files[4].diff = Some(crate::diff::diff_contents("", "widget()"));
+        files[5].diff = Some(crate::diff::diff_contents("", "widgetExtra()"));
+        let paths: Vec<_> = related_files(&files, 0).into_iter().map(|(i, _)| files[i].filename.as_str()).collect();
+        assert_eq!(paths, ["tests/widget.spec.ts", "tests/widget.test.ts", "a/uses.ts", "b/uses.ts"]);
+    }
+
+    #[test]
+    fn related_files_rank_matching_stems_before_mentions() {
+        let mut files: Vec<_> = ["src/card.tsx", "styles/card.css", "src/mentions.ts", "other/card.png"]
+            .map(pf)
+            .into();
+        files[2].diff = Some(crate::diff::diff_contents("", "card"));
+        let matches = related_files(&files, 0);
+        assert_eq!(matches, [(3, Relation::SameName), (1, Relation::SameName), (2, Relation::Mentions)]);
+    }
 
     fn m(patterns: &str, path: &str) -> bool {
         GlobMatcher::new(patterns).unwrap().is_match(path)

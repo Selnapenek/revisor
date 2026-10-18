@@ -369,6 +369,9 @@ impl DiffView {
     fn scroll_to(&mut self, target: &ScrollTarget, cx: &mut Context<Self>) {
         if let Some((ix, context)) = self.target_row(target, cx) {
             self.scroll_to_row(ix, context, cx);
+            if let ScrollTarget::Spot(spot) = target {
+                self.list.scroll_to(ListOffset { item_ix: ix.saturating_sub(context), offset_in_item: spot.offset_in_item });
+            }
         }
     }
 
@@ -400,7 +403,8 @@ impl DiffView {
     /// The current position: the first line of the top file in view, or its header.
     fn current_spot(&self, cx: &App) -> Option<Spot> {
         let model = self.model.read(cx);
-        let top = self.list.logical_scroll_top().item_ix;
+        let scroll = self.list.logical_scroll_top();
+        let top = scroll.item_ix;
         let fi = self.rows.get(top)?.file();
         let path = model.files.get(fi)?.filename.clone();
         let line = self.rows[top..]
@@ -409,8 +413,8 @@ impl DiffView {
             .enumerate()
             .find_map(|(above, &r)| Some((above, self.row_anchor(model, r)?)));
         Some(match line {
-            Some((above, line)) => Spot { path, line: Some(line), above },
-            None => Spot { path, line: None, above: 0 },
+            Some((above, line)) => Spot { path, line: Some(line), above, offset_in_item: scroll.offset_in_item },
+            None => Spot { path, line: None, above: 0, offset_in_item: scroll.offset_in_item },
         })
     }
 
@@ -530,7 +534,7 @@ impl DiffView {
             ScrollTarget::Line { path, side, line } => {
                 anchor_row(path, *side, *line).map(|ix| (ix, SCROLL_CONTEXT)).or_else(|| file_row(path))
             }
-            ScrollTarget::Spot(Spot { path, line, above }) => line
+            ScrollTarget::Spot(Spot { path, line, above, .. }) => line
                 .and_then(|(side, line)| anchor_row(path, side, line))
                 .map(|ix| (ix, *above))
                 .or_else(|| file_row(path)),
