@@ -165,6 +165,7 @@ pub trait GitProvider: Send + Sync {
         repo: &str,
         state: PrState,
         filters: &PrSearchFilters,
+        query: &str,
         page: u32,
         per_page: u32,
     ) -> Result<PaginatedResult<PullRequest>>;

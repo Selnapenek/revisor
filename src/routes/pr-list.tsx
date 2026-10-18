@@ -1,7 +1,7 @@
 import { createEffect, createSignal, onMount, Show, For, onCleanup } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
 import { createVirtualizer } from "@tanstack/solid-virtual";
-import { listPullRequests, searchPullRequests } from "~/api";
+import { searchPullRequests } from "~/api";
 import { prListStore, reposStore, uiStore, prFiltersStore } from "~/stores";
 import type { PrFilter } from "~/stores/pr-list.store";
 import { PRListItem } from "~/components/pr-list/PRListItem";
@@ -24,8 +24,10 @@ export default function PRListPage() {
   const [isRefreshing, setIsRefreshing] = createSignal(false);
 
   let initialized = false;
+  let requestId = 0;
 
   const fetchPrs = async (pageNum: number, append = false, silent = false) => {
+    const currentRequest = ++requestId;
     if (!append) {
       if (!silent) setShowLoader(true);
       else setIsRefreshing(true);
@@ -34,22 +36,16 @@ export default function PRListPage() {
     }
 
     try {
-      const result = prFiltersStore.hasActiveFilters
-        ? await searchPullRequests(
-            params.owner,
-            params.repo,
-            prListStore.filter,
-            prFiltersStore.activeFilters,
-            pageNum,
-            30,
-          )
-        : await listPullRequests(
-            params.owner,
-            params.repo,
-            prListStore.filter,
-            pageNum,
-            30,
-          );
+      const result = await searchPullRequests(
+        params.owner,
+        params.repo,
+        prListStore.filter,
+        prFiltersStore.activeFilters,
+        prListStore.searchQuery.trim(),
+        pageNum,
+        30,
+      );
+      if (currentRequest !== requestId) return;
 
       if (append) {
         prListStore.appendPrs(result.items);
@@ -58,11 +54,14 @@ export default function PRListPage() {
       }
       prListStore.setPage(pageNum);
       prListStore.setHasNextPage(result.has_next_page);
+      prListStore.setTotalCount(result.total_count);
 
       prFiltersStore.updateKnownUsersFromPrs(result.items);
     } catch (err) {
+      if (currentRequest !== requestId) return;
       uiStore.showError(`Failed to load PRs: ${err}`);
     } finally {
+      if (currentRequest !== requestId) return;
       setShowLoader(false);
       setIsRefreshing(false);
       prListStore.setIsLoadingMore(false);
@@ -89,14 +88,26 @@ export default function PRListPage() {
   let alive = true;
   onCleanup(() => {
     alive = false;
+    requestId++;
     prFiltersStore.reset();
     clearTimeout(filterDebounce);
+    clearTimeout(searchDebounce);
   });
 
   createEffect(() => {
     const _filter = prListStore.filter;
     if (!initialized) return;
     fetchPrs(1);
+  });
+
+  let searchDebounce: ReturnType<typeof setTimeout> | undefined;
+  createEffect(() => {
+    const _query = prListStore.searchQuery;
+    if (!initialized) return;
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      if (alive) fetchPrs(1);
+    }, 300);
   });
 
   let filterDebounce: ReturnType<typeof setTimeout> | undefined;
@@ -129,7 +140,7 @@ export default function PRListPage() {
   };
 
   // Virtual scrolling
-  const items = () => prListStore.filteredPrs;
+  const items = () => prListStore.prs;
 
   const virtualizer = createVirtualizer({
     get count() { return items().length; },
@@ -159,10 +170,21 @@ export default function PRListPage() {
           <span class="text-(--color-text-muted) mx-0.5">/</span>
           <span class="font-semibold text-(--color-text-primary)">{params.repo}</span>
         </span>
+        <span class="text-xs text-(--color-text-muted)">
+          {prListStore.totalCount ?? "…"} pull requests
+        </span>
         <div class="ml-auto flex items-center gap-3">
           <PRListSearch
             value={prListStore.searchQuery}
-            onChange={(v) => prListStore.setSearchQuery(v)}
+            onChange={(v) => {
+              requestId++;
+              prListStore.setPrs([]);
+              prListStore.setTotalCount(null);
+              prListStore.setHasNextPage(false);
+              prListStore.setIsLoadingMore(false);
+              setShowLoader(true);
+              prListStore.setSearchQuery(v);
+            }}
           />
           <PRListFilters
             current={prListStore.filter}
@@ -186,7 +208,7 @@ export default function PRListPage() {
         {/* Empty state */}
         <Show when={!showLoader() && items().length === 0}>
           <div class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-(--color-text-muted)">
-            <span>{prFiltersStore.hasActiveFilters ? "No pull requests match the active filters" : "No pull requests found"}</span>
+            <span>{prFiltersStore.hasActiveFilters || prListStore.searchQuery ? "No pull requests match the search or filters" : "No pull requests found"}</span>
             <Show when={prFiltersStore.hasActiveFilters}>
               <button
                 class="text-xs text-(--color-accent-fg) hover:underline cursor-pointer"

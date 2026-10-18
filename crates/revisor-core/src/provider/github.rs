@@ -656,6 +656,32 @@ impl From<GhReviewComment> for ReviewComment {
     }
 }
 
+fn pr_search_query(owner: &str, repo: &str, state: PrState, filters: &PrSearchFilters, text: &str) -> String {
+    let quoted = |value: &str| format!("\"{}\"", value.replace('"', "\\\""));
+    let mut parts = vec!["is:pr".to_string(), format!("repo:{owner}/{repo}")];
+    match state {
+        PrState::Open => parts.push("state:open".into()),
+        PrState::Closed => parts.push("state:closed".into()),
+        PrState::All => {}
+    }
+    for author in &filters.authors {
+        parts.push(format!("author:{author}"));
+    }
+    for label in &filters.labels {
+        parts.push(format!("label:{}", quoted(label)));
+    }
+    for assignee in &filters.assignees {
+        parts.push(format!("assignee:{assignee}"));
+    }
+    if let Some(review) = &filters.review_status {
+        parts.push(if review.contains(':') { review.clone() } else { format!("review:{review}") });
+    }
+    if !text.trim().is_empty() {
+        parts.push(quoted(text.trim()));
+    }
+    parts.join(" ")
+}
+
 #[async_trait]
 impl GitProvider for GithubProvider {
     async fn validate_token(&self) -> Result<ProviderUser> {
@@ -1055,46 +1081,18 @@ impl GitProvider for GithubProvider {
         repo: &str,
         state: PrState,
         filters: &PrSearchFilters,
+        query: &str,
         page: u32,
         per_page: u32,
     ) -> Result<PaginatedResult<PullRequest>> {
-        let mut qualifiers = vec![
-            format!("is:pr"),
-            format!("repo:{}/{}", owner, repo),
-        ];
-
-        match state {
-            PrState::Open => qualifiers.push("state:open".to_string()),
-            PrState::Closed => qualifiers.push("state:closed".to_string()),
-            PrState::All => {} // no state qualifier = all
-        }
-
-        for author in &filters.authors {
-            qualifiers.push(format!("author:{}", author));
-        }
-        for label in &filters.labels {
-            qualifiers.push(format!("label:{}", label));
-        }
-        for assignee in &filters.assignees {
-            qualifiers.push(format!("assignee:{}", assignee));
-        }
-        if let Some(ref review) = filters.review_status {
-            // Handle special cases like "reviewed-by:@me", "-reviewed-by:@me", "review-requested:@me"
-            if review.contains(':') {
-                qualifiers.push(review.clone());
-            } else {
-                qualifiers.push(format!("review:{}", review));
-            }
-        }
-
-        let query = qualifiers.join(" ");
+        let query = pr_search_query(owner, repo, state, filters, query);
         let url = format!(
             "https://api.github.com/search/issues?q={}&sort=updated&order=desc&per_page={}&page={}",
             urlencoding(&query), per_page, page
         );
 
         let result: GhSearchResult2 = self.get(&url).await?;
-        let has_next = (page as u64 * per_page as u64) < result.total_count;
+        let has_next = (page as u64 * per_page as u64) < result.total_count.min(1000);
         let mut items: Vec<PullRequest> = result.items.into_iter().map(Into::into).collect();
         self.fill_list_stats(owner, repo, &mut items).await;
 
@@ -1432,6 +1430,23 @@ fn review_comment_from_graphql(node: &serde_json::Value, side: &str) -> Result<R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pr_search_query_includes_text_state_and_filters() {
+        let filters = PrSearchFilters {
+            authors: vec!["alice".into()],
+            labels: vec!["needs review".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            pr_search_query("org", "repo", PrState::Open, &filters, "  fix login  "),
+            "is:pr repo:org/repo state:open author:alice label:\"needs review\" \"fix login\""
+        );
+        assert_eq!(
+            pr_search_query("org", "repo", PrState::All, &PrSearchFilters::default(), ""),
+            "is:pr repo:org/repo"
+        );
+    }
 
     #[test]
     fn new_comment_body_adds_range_only_when_set() {

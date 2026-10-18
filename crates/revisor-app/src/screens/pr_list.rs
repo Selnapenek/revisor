@@ -1,4 +1,4 @@
-//! Pull requests of one repository: state tabs, client-side search, advanced filters, infinite scroll,
+//! Pull requests of one repository: state tabs, API search, advanced filters, infinite scroll,
 //! keyboard selection.
 
 use crate::app::{self, Route};
@@ -54,9 +54,10 @@ pub struct PrListScreen {
     label_search: Entity<InputState>,
     assignee_search: Entity<InputState>,
     prs: Vec<PullRequest>,
+    total_count: Option<u64>,
     /// PR number to when the user last had it open.
     views: HashMap<u64, String>,
-    /// Indexes into `prs` matching the search, refreshed on render.
+    /// Indexes into the loaded API page, refreshed on render.
     visible: Vec<usize>,
     /// Number of the PR picked with the arrow keys; survives filtering and paging.
     selected: Option<u64>,
@@ -83,11 +84,11 @@ impl PrListScreen {
         let input = |placeholder: &'static str, window: &mut Window, cx: &mut Context<Self>| {
             cx.new(|cx| InputState::new(window, cx).placeholder(placeholder))
         };
-        let search = input("Filter pull requests...", window, cx);
+        let search = input("Search pull requests...", window, cx);
         let author_search = input("Filter authors...", window, cx);
         let label_search = input("Filter labels...", window, cx);
         let assignee_search = input("Filter assignees...", window, cx);
-        let mut subscriptions: Vec<_> = [&search, &author_search, &label_search, &assignee_search]
+        let mut subscriptions: Vec<_> = [&author_search, &label_search, &assignee_search]
             .into_iter()
             .map(|input| {
                 cx.subscribe(input, |_, _, event: &InputEvent, cx| {
@@ -97,6 +98,11 @@ impl PrListScreen {
                 })
             })
             .collect();
+        subscriptions.push(cx.subscribe_in(&search, window, |this, _, event, window, cx| {
+            if let InputEvent::Change = event {
+                this.schedule_reload(window, cx);
+            }
+        }));
 
         let focus = cx.focus_handle();
         focus.focus(window, cx);
@@ -133,6 +139,7 @@ impl PrListScreen {
             label_search,
             assignee_search,
             prs: Vec::new(),
+            total_count: None,
             views: HashMap::new(),
             visible: Vec::new(),
             selected: None,
@@ -163,18 +170,14 @@ impl PrListScreen {
     fn load(&mut self, page: u32, window: &mut Window, cx: &mut Context<Self>) {
         self.loading = true;
         self.refreshing = false;
-        let (owner, repo, state, filters) =
-            (self.owner.to_string(), self.repo.to_string(), STATES[self.state], self.filters.clone());
+        let (owner, repo, state, filters, query) =
+            (self.owner.to_string(), self.repo.to_string(), STATES[self.state], self.filters.clone(), self.search.read(cx).value().to_string());
         self._load = backend::spawn(
             window,
             cx,
             move |s| async move {
                 let p = s.provider().await?;
-                let result = if filters.is_empty() {
-                    p.list_pull_requests(&owner, &repo, state, page, PER_PAGE).await
-                } else {
-                    p.search_pull_requests(&owner, &repo, state, &filters, page, PER_PAGE).await
-                }
+                let result = p.search_pull_requests(&owner, &repo, state, &filters, query.trim(), page, PER_PAGE).await
                 .map_err(backend::err)?;
                 // Views are non-critical: on failure every PR shows as new.
                 let views = queries::get_pr_views(s.cache.lock().await.conn(), &owner, &repo).unwrap_or_default();
@@ -205,6 +208,7 @@ impl PrListScreen {
                         }
                         this.page = page;
                         this.has_next = result.has_next_page;
+                        this.total_count = result.total_count;
                         this.loaded = true;
                         this.error = None;
                     }
@@ -214,6 +218,7 @@ impl PrListScreen {
                     // Page 1 replaces the list: drop rows of the previous tab/filters, show the error inline.
                     Err(e) if page == 1 => {
                         this.prs.clear();
+                        this.total_count = None;
                         this.has_next = false;
                         this.loaded = false;
                         this.error = Some(e.into());
@@ -258,6 +263,19 @@ impl PrListScreen {
         self.load(1, window, cx);
     }
 
+    fn schedule_reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._load = Task::ready(());
+        self.prs.clear();
+        self.total_count = None;
+        self.has_next = false;
+        self.loading = true;
+        self._debounce = cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(Duration::from_millis(300)).await;
+            this.update_in(cx, |this, window, cx| this.load(1, window, cx)).ok();
+        });
+        cx.notify();
+    }
+
     /// Apply a filter change: persist it and reload after a 300 ms debounce.
     fn update_filters(&mut self, f: impl FnOnce(&mut PrSearchFilters), window: &mut Window, cx: &mut Context<Self>) {
         f(&mut self.filters);
@@ -272,11 +290,7 @@ impl PrListScreen {
             |_, _: Result<(), String>, _, _| {},
         )
         .detach();
-        self._debounce = cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor().timer(Duration::from_millis(300)).await;
-            this.update_in(cx, |this, window, cx| this.load(1, window, cx)).ok();
-        });
-        cx.notify();
+        self.schedule_reload(window, cx);
     }
 
     fn clear_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -567,7 +581,7 @@ impl PrListScreen {
                             .on_click(cx.listener(|this, _, window, cx| this.load(1, window, cx))),
                     )
             } else {
-                let filtered = !self.filters.is_empty();
+                let filtered = !self.filters.is_empty() || !self.search.read(cx).value().trim().is_empty();
                 v_flex()
                     .items_center()
                     .gap_2()
@@ -614,7 +628,12 @@ impl PrListScreen {
 
 impl Render for PrListScreen {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.visible = pr_filters::filter_prs(&self.prs, self.search.read(cx).value().trim());
+        self.visible = (0..self.prs.len()).collect();
+        let count_label = match self.total_count {
+            Some(count) => format!("{count} pull request{}", if count == 1 { "" } else { "s" }),
+            None if self.loading => "Loading pull requests…".to_string(),
+            None => "0 pull requests".to_string(),
+        };
         let theme = cx.theme();
         let header = h_flex()
             .flex_shrink_0()
@@ -646,7 +665,7 @@ impl Render for PrListScreen {
                             .child(div().font_medium().child(self.repo.clone())),
                     )
                     .child(theme::eyebrow(
-                        format!("{} pull request{}", self.visible.len(), if self.visible.len() == 1 { "" } else { "s" }),
+                        count_label,
                         cx,
                     )),
             )

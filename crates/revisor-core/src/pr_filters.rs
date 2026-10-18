@@ -1,7 +1,7 @@
 //! PR list filters: per-repo persistence, presets, known users, client-side search.
 
 use crate::cache::queries::{get_setting, set_setting};
-use crate::provider::types::{PrSearchFilters, PrUser, PullRequest};
+use crate::provider::types::{PrSearchFilters, PrUser};
 use rusqlite::Connection;
 
 pub const REVIEW_REQUESTED_ME: &str = "review-requested:@me";
@@ -63,21 +63,6 @@ pub fn merge_users(known: &mut Vec<PrUser>, incoming: impl IntoIterator<Item = P
         }
     }
     known.sort_by(|a, b| a.login.cmp(&b.login));
-}
-
-/// Indexes of PRs whose title, author or number contains `query` (case-insensitive).
-pub fn filter_prs(prs: &[PullRequest], query: &str) -> Vec<usize> {
-    let q = query.to_lowercase();
-    prs.iter()
-        .enumerate()
-        .filter(|(_, pr)| {
-            q.is_empty()
-                || pr.title.to_lowercase().contains(&q)
-                || pr.author_login.to_lowercase().contains(&q)
-                || pr.number.to_string().contains(&q)
-        })
-        .map(|(i, _)| i)
-        .collect()
 }
 
 #[cfg(test)]
@@ -166,24 +151,4 @@ mod tests {
         assert_eq!(logins, ["alice", "bob", "carol"]);
     }
 
-    #[test]
-    fn filter_prs_matches_title_author_and_number() {
-        let pr = |number: u64, title: &str, author: &str| -> PullRequest {
-            serde_json::from_value(serde_json::json!({
-                "id": number, "number": number, "title": title, "body": null, "state": "open",
-                "draft": false, "author_login": author, "author_avatar": "", "labels": [],
-                "created_at": "", "updated_at": "", "merged_at": null, "comments_count": 0,
-                "review_comments_count": 0, "additions": 0, "deletions": 0, "changed_files": 0,
-                "head_sha": "", "base_sha": "", "head_ref": "", "base_ref": "", "html_url": "",
-                "assignees": [], "requested_reviewers": []
-            }))
-            .unwrap()
-        };
-        let prs = [pr(12, "Fix Login", "alice"), pr(345, "Add cache", "Bob")];
-        assert_eq!(filter_prs(&prs, ""), [0, 1]);
-        assert_eq!(filter_prs(&prs, "login"), [0]);
-        assert_eq!(filter_prs(&prs, "bob"), [1]);
-        assert_eq!(filter_prs(&prs, "34"), [1]);
-        assert!(filter_prs(&prs, "zzz").is_empty());
-    }
 }
