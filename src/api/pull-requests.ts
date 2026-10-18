@@ -30,6 +30,7 @@ export async function searchPullRequests(
   repo: string,
   prState: string,
   filters: PrSearchFilters,
+  query: string,
   page: number,
   perPage: number = 30,
 ): Promise<PaginatedResult<PullRequest>> {
@@ -38,6 +39,7 @@ export async function searchPullRequests(
     repo,
     prState,
     filters,
+    query,
     page,
     perPage,
   });

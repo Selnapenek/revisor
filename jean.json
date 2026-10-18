@@ -1,7 +1,7 @@
 {
   "scripts": {
-    "setup": "pnpm install",
+    "setup": null,
     "teardown": null,
-    "run": "pnpm tauri dev"
+    "run": "cargo run -p revisor-app"
   }
 }

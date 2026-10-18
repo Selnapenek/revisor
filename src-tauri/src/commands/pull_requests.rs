@@ -53,6 +53,7 @@ pub async fn search_pull_requests(
     repo: String,
     pr_state: String,
     filters: PrSearchFilters,
+    query: String,
     page: u32,
     per_page: u32,
 ) -> Result<PaginatedResult<PullRequest>, String> {
@@ -68,7 +69,7 @@ pub async fn search_pull_requests(
     };
 
     provider
-        .search_pull_requests(&owner, &repo, state_filter, &filters, page, per_page)
+        .search_pull_requests(&owner, &repo, state_filter, &filters, &query, page, per_page)
         .await
         .map_err(|e| e.to_string())
 }

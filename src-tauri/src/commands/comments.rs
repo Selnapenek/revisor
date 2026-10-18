@@ -104,6 +104,7 @@ pub async fn add_comment(
         side,
         body,
         commit_id,
+        start_line: None,
     };
 
     provider

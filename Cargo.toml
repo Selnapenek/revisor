@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "src-tauri"]
+
+# GPUI is far too slow unoptimized; keep our crates debuggable, optimize dependencies.
+[profile.dev.package."*"]
+opt-level = 2

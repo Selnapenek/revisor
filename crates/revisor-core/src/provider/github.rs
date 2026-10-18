@@ -1,0 +1,1527 @@
+use super::rate_limit::RateLimitTracker;
+use super::types::*;
+use super::GitProvider;
+use anyhow::{bail, Context, Result};
+use async_trait::async_trait;
+use reqwest::Client;
+use serde::Deserialize;
+
+/// Non-success HTTP status from the REST API; callers downcast it to explain the status.
+#[derive(Debug)]
+pub struct ApiError {
+    pub status: u16,
+    pub body: String,
+}
+
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let reason = reqwest::StatusCode::from_u16(self.status).ok().and_then(|s| s.canonical_reason());
+        write!(f, "GitHub API error {} {}: {}", self.status, reason.unwrap_or(""), self.body)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+/// User-facing reason a pull request failed to load.
+pub fn pr_load_error(e: &anyhow::Error, owner: &str, repo: &str, number: u64) -> String {
+    let Some(api) = e.downcast_ref::<ApiError>() else { return e.to_string() };
+    match api.status {
+        404 => format!(
+            "{owner}/{repo}#{number} does not exist, or your GitHub account has no access to it. \
+             For a private repository, check that your sign-in has access."
+        ),
+        401 => "GitHub did not accept your sign-in. Sign out, then sign in again.".into(),
+        403 | 429 if api.body.to_lowercase().contains("rate limit") => {
+            "GitHub API rate limit exceeded. Try again later.".into()
+        }
+        403 => format!(
+            "GitHub refused access to {owner}/{repo}. The organization may require SSO authorization, \
+             or your token lacks the repo scope."
+        ),
+        _ => e.to_string(),
+    }
+}
+
+pub struct GithubProvider {
+    client: Client,
+    token: String,
+    rate_limit: RateLimitTracker,
+}
+
+impl GithubProvider {
+    pub fn new(token: String) -> Result<Self> {
+        let client = Client::builder()
+            .user_agent("Revisor/1.0.0")
+            .build()
+            .context("Failed to create HTTP client")?;
+
+        Ok(Self {
+            client,
+            token,
+            rate_limit: RateLimitTracker::new(),
+        })
+    }
+
+    async fn get<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T> {
+        if self.rate_limit.should_throttle() {
+            bail!("GitHub API rate limit nearly exhausted. Resets at timestamp {}.",
+                  self.rate_limit.info().reset_at);
+        }
+
+        let response = self
+            .client
+            .get(url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await
+            .context("Network request failed")?;
+
+        self.rate_limit.update_from_headers(response.headers());
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            return Err(ApiError { status, body }.into());
+        }
+
+        response.json::<T>().await.context("Failed to parse response")
+    }
+
+    async fn post<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+        body: &impl serde::Serialize,
+    ) -> Result<T> {
+        let response = self
+            .client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(body)
+            .send()
+            .await
+            .context("Network request failed")?;
+
+        self.rate_limit.update_from_headers(response.headers());
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("GitHub API error {}: {}", status, body);
+        }
+
+        response.json::<T>().await.context("Failed to parse response")
+    }
+
+    async fn patch<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+        body: &impl serde::Serialize,
+    ) -> Result<T> {
+        let response = self
+            .client
+            .patch(url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .json(body)
+            .send()
+            .await
+            .context("Network request failed")?;
+
+        self.rate_limit.update_from_headers(response.headers());
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("GitHub API error {}: {}", status, body);
+        }
+
+        response.json::<T>().await.context("Failed to parse response")
+    }
+
+    /// GET request that returns raw text (used for fetching file content)
+    async fn get_raw(&self, url: &str) -> Result<String> {
+        if self.rate_limit.should_throttle() {
+            bail!("GitHub API rate limit nearly exhausted. Resets at timestamp {}.",
+                  self.rate_limit.info().reset_at);
+        }
+
+        let response = self
+            .client
+            .get(url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github.raw+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await
+            .context("Network request failed")?;
+
+        self.rate_limit.update_from_headers(response.headers());
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("GitHub API error {}: {}", status, body);
+        }
+
+        response.text().await.context("Failed to read response body")
+    }
+
+    async fn delete_request(&self, url: &str) -> Result<()> {
+        let response = self
+            .client
+            .delete(url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await
+            .context("Network request failed")?;
+
+        self.rate_limit.update_from_headers(response.headers());
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("GitHub API error {}: {}", status, body);
+        }
+
+        Ok(())
+    }
+
+    /// Send a GraphQL query to the GitHub API
+    async fn graphql(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Result<serde_json::Value> {
+        if self.rate_limit.should_throttle() {
+            bail!(
+                "GitHub API rate limit nearly exhausted. Resets at timestamp {}.",
+                self.rate_limit.info().reset_at
+            );
+        }
+
+        let body = serde_json::json!({
+            "query": query,
+            "variables": variables,
+        });
+
+        let response = self
+            .client
+            .post("https://api.github.com/graphql")
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .json(&body)
+            .send()
+            .await
+            .context("GraphQL request failed")?;
+
+        self.rate_limit.update_from_headers(response.headers());
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            bail!("GitHub GraphQL error {}: {}", status, text);
+        }
+
+        let data: serde_json::Value = response.json().await.context("Failed to parse GraphQL response")?;
+
+        if let Some(errors) = data.get("errors") {
+            if let Some(arr) = errors.as_array() {
+                if let Some(first) = arr.first() {
+                    let msg = first
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("Unknown GraphQL error");
+                    bail!("GitHub GraphQL error: {}", msg);
+                }
+            }
+        }
+
+        data.get("data")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("GraphQL response missing 'data' field"))
+    }
+
+    /// List and search endpoints leave out diff and comment counts: fetch them for the whole page in one
+    /// GraphQL query. Best effort: on failure the counts stay zero and the list still shows.
+    async fn fill_list_stats(&self, owner: &str, repo: &str, prs: &mut [PullRequest]) {
+        if prs.is_empty() {
+            return;
+        }
+        let fields: String = prs
+            .iter()
+            .map(|pr| format!("p{0}: pullRequest(number: {0}) {{ additions deletions changedFiles totalCommentsCount }} ", pr.number))
+            .collect();
+        let query = format!("query($owner: String!, $name: String!) {{ repository(owner: $owner, name: $name) {{ {fields}}} }}");
+        if let Ok(data) = self.graphql(&query, serde_json::json!({ "owner": owner, "name": repo })).await {
+            apply_list_stats(&data["repository"], prs);
+        }
+    }
+
+    /// Check if response has a next page via Link header
+    fn has_next_page(headers: &reqwest::header::HeaderMap) -> bool {
+        headers
+            .get("link")
+            .and_then(|v| v.to_str().ok())
+            .map(|link| link.contains("rel=\"next\""))
+            .unwrap_or(false)
+    }
+
+    async fn get_with_pagination<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+    ) -> Result<(Vec<T>, bool)> {
+        if self.rate_limit.should_throttle() {
+            bail!("GitHub API rate limit nearly exhausted.");
+        }
+
+        let response = self
+            .client
+            .get(url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .send()
+            .await
+            .context("Network request failed")?;
+
+        self.rate_limit.update_from_headers(response.headers());
+        let has_next = Self::has_next_page(response.headers());
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("GitHub API error {}: {}", status, body);
+        }
+
+        let items = response
+            .json::<Vec<T>>()
+            .await
+            .context("Failed to parse response")?;
+
+        Ok((items, has_next))
+    }
+}
+
+// GitHub API response types (mapped to provider-agnostic types)
+#[derive(Deserialize)]
+struct GhUser {
+    login: String,
+    avatar_url: String,
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GhLabel {
+    name: String,
+    color: String,
+}
+
+#[derive(Deserialize)]
+struct GhPrUser {
+    login: String,
+    avatar_url: String,
+}
+
+#[derive(Deserialize)]
+struct GhPullRequest {
+    id: u64,
+    number: u64,
+    title: String,
+    body: Option<String>,
+    state: String,
+    draft: Option<bool>,
+    user: GhPrUser,
+    labels: Vec<GhLabel>,
+    assignees: Option<Vec<GhPrUser>>,
+    requested_reviewers: Option<Vec<GhPrUser>>,
+    created_at: String,
+    updated_at: String,
+    merged_at: Option<String>,
+    comments: Option<u64>,
+    review_comments: Option<u64>,
+    additions: Option<u64>,
+    deletions: Option<u64>,
+    changed_files: Option<u64>,
+    head: GhRef,
+    base: GhRef,
+    html_url: String,
+}
+
+#[derive(Deserialize)]
+struct GhRepo {
+    full_name: String,
+    name: String,
+    owner: GhPrUser,
+    description: Option<String>,
+    private: bool,
+    fork: bool,
+    stargazers_count: u64,
+    updated_at: String,
+    html_url: String,
+}
+
+#[derive(Deserialize)]
+struct GhSearchResult {
+    items: Vec<GhRepo>,
+    total_count: u64,
+}
+
+impl From<GhRepo> for RepoInfo {
+    fn from(r: GhRepo) -> Self {
+        Self {
+            owner: r.owner.login,
+            name: r.name,
+            full_name: r.full_name,
+            description: r.description,
+            private: r.private,
+            fork: r.fork,
+            stargazers_count: r.stargazers_count,
+            updated_at: r.updated_at,
+            html_url: r.html_url,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct GhRef {
+    sha: String,
+    #[serde(rename = "ref")]
+    ref_name: String,
+}
+
+#[derive(Deserialize)]
+struct GhPrFile {
+    sha: String,
+    filename: String,
+    previous_filename: Option<String>,
+    status: String,
+    additions: u64,
+    deletions: u64,
+    patch: Option<String>,
+}
+
+/// GitHub Search API response for issues/PRs
+#[derive(Deserialize)]
+struct GhSearchResult2 {
+    items: Vec<GhSearchIssueItem>,
+    total_count: u64,
+}
+
+/// A single item from the GitHub Search Issues API (used for PR search)
+#[derive(Deserialize)]
+struct GhSearchIssueItem {
+    id: u64,
+    number: u64,
+    title: String,
+    body: Option<String>,
+    state: String,
+    draft: Option<bool>,
+    user: GhPrUser,
+    labels: Vec<GhLabel>,
+    assignees: Option<Vec<GhPrUser>>,
+    created_at: String,
+    updated_at: String,
+    pull_request: Option<GhSearchPrRef>,
+    html_url: String,
+}
+
+#[derive(Deserialize)]
+struct GhSearchPrRef {
+    merged_at: Option<String>,
+}
+
+/// GitHub commit response (from PR commits endpoint)
+#[derive(Deserialize)]
+struct GhCommit {
+    sha: String,
+    commit: GhCommitDetail,
+    author: Option<GhPrUser>,
+    parents: Vec<GhCommitParent>,
+}
+
+#[derive(Deserialize)]
+struct GhCommitDetail {
+    message: String,
+    author: GhCommitAuthor,
+}
+
+#[derive(Deserialize)]
+struct GhCommitAuthor {
+    date: String,
+}
+
+#[derive(Deserialize)]
+struct GhCommitParent {
+    sha: String,
+}
+
+impl From<GhCommit> for Commit {
+    fn from(c: GhCommit) -> Self {
+        let short_sha = c.sha.chars().take(7).collect();
+        let message = c.commit.message.lines().next().unwrap_or("").to_string();
+        let (author_login, author_avatar) = match c.author {
+            Some(u) => (u.login, u.avatar_url),
+            None => ("unknown".to_string(), String::new()),
+        };
+        Self {
+            sha: c.sha,
+            short_sha,
+            message,
+            author_login,
+            author_avatar,
+            authored_date: c.commit.author.date,
+            parents: c.parents.into_iter().map(|p| p.sha).collect(),
+        }
+    }
+}
+
+/// GitHub compare API response
+#[derive(Deserialize)]
+struct GhCompareResponse {
+    files: Option<Vec<GhPrFile>>,
+}
+
+impl From<GhSearchIssueItem> for PullRequest {
+    fn from(item: GhSearchIssueItem) -> Self {
+        let merged_at = item.pull_request.as_ref().and_then(|pr| pr.merged_at.clone());
+        Self {
+            id: item.id,
+            number: item.number,
+            title: item.title,
+            body: item.body,
+            state: if merged_at.is_some() { "closed".to_string() } else { item.state },
+            draft: item.draft.unwrap_or(false),
+            author_login: item.user.login.clone(),
+            author_avatar: item.user.avatar_url.clone(),
+            labels: item.labels.into_iter().map(|l| Label { name: l.name, color: l.color }).collect(),
+            assignees: item.assignees.unwrap_or_default().into_iter().map(|u| PrUser { login: u.login, avatar_url: u.avatar_url }).collect(),
+            requested_reviewers: Vec::new(), // Search API doesn't return this
+            created_at: item.created_at,
+            updated_at: item.updated_at,
+            merged_at,
+            // Search API doesn't return these fields — zero-fill
+            comments_count: 0,
+            review_comments_count: 0,
+            additions: 0,
+            deletions: 0,
+            changed_files: 0,
+            head_sha: String::new(),
+            base_sha: String::new(),
+            head_ref: String::new(),
+            base_ref: String::new(),
+            html_url: item.html_url,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct GhReviewComment {
+    id: u64,
+    path: String,
+    line: Option<u64>,
+    original_line: Option<u64>,
+    side: Option<String>,
+    diff_hunk: String,
+    body: String,
+    user: GhPrUser,
+    created_at: String,
+    updated_at: String,
+    in_reply_to_id: Option<u64>,
+    pull_request_review_id: Option<u64>,
+    html_url: String,
+}
+
+#[derive(Deserialize)]
+struct GhIssueComment {
+    id: u64,
+    body: String,
+    user: GhPrUser,
+    created_at: String,
+    updated_at: String,
+    html_url: String,
+}
+
+impl From<GhIssueComment> for IssueComment {
+    fn from(c: GhIssueComment) -> Self {
+        Self {
+            id: c.id,
+            body: c.body,
+            author_login: c.user.login,
+            author_avatar: c.user.avatar_url,
+            created_at: c.created_at,
+            updated_at: c.updated_at,
+            html_url: c.html_url,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct GhPrReview {
+    id: u64,
+    #[serde(default)]
+    node_id: String,
+    body: Option<String>,
+    state: String,
+    user: GhPrUser,
+    submitted_at: Option<String>,
+    html_url: String,
+}
+
+impl From<GhPrReview> for PrReview {
+    fn from(r: GhPrReview) -> Self {
+        Self {
+            id: r.id,
+            node_id: r.node_id,
+            body: r.body.unwrap_or_default(),
+            state: r.state,
+            author_login: r.user.login,
+            author_avatar: r.user.avatar_url,
+            submitted_at: r.submitted_at,
+            html_url: r.html_url,
+        }
+    }
+}
+
+impl From<GhPullRequest> for PullRequest {
+    fn from(pr: GhPullRequest) -> Self {
+        Self {
+            id: pr.id,
+            number: pr.number,
+            title: pr.title,
+            body: pr.body,
+            state: pr.state,
+            draft: pr.draft.unwrap_or(false),
+            author_login: pr.user.login.clone(),
+            author_avatar: pr.user.avatar_url.clone(),
+            labels: pr.labels.into_iter().map(|l| Label { name: l.name, color: l.color }).collect(),
+            assignees: pr.assignees.unwrap_or_default().into_iter().map(|u| PrUser { login: u.login, avatar_url: u.avatar_url }).collect(),
+            requested_reviewers: pr.requested_reviewers.unwrap_or_default().into_iter().map(|u| PrUser { login: u.login, avatar_url: u.avatar_url }).collect(),
+            created_at: pr.created_at,
+            updated_at: pr.updated_at,
+            merged_at: pr.merged_at,
+            comments_count: pr.comments.unwrap_or(0),
+            review_comments_count: pr.review_comments.unwrap_or(0),
+            additions: pr.additions.unwrap_or(0),
+            deletions: pr.deletions.unwrap_or(0),
+            changed_files: pr.changed_files.unwrap_or(0),
+            head_sha: pr.head.sha,
+            base_sha: pr.base.sha,
+            head_ref: pr.head.ref_name,
+            base_ref: pr.base.ref_name,
+            html_url: pr.html_url,
+        }
+    }
+}
+
+impl From<GhPrFile> for PrFile {
+    fn from(f: GhPrFile) -> Self {
+        Self {
+            sha: f.sha,
+            filename: f.filename,
+            previous_filename: f.previous_filename,
+            status: f.status,
+            additions: f.additions,
+            deletions: f.deletions,
+            patch: f.patch,
+        }
+    }
+}
+
+impl From<GhReviewComment> for ReviewComment {
+    fn from(c: GhReviewComment) -> Self {
+        Self {
+            id: c.id,
+            path: c.path,
+            line: c.line,
+            original_line: c.original_line,
+            side: c.side,
+            diff_hunk: c.diff_hunk,
+            body: c.body,
+            author_login: c.user.login,
+            author_avatar: c.user.avatar_url,
+            created_at: c.created_at,
+            updated_at: c.updated_at,
+            in_reply_to_id: c.in_reply_to_id,
+            review_id: c.pull_request_review_id,
+            html_url: c.html_url,
+            outdated: c.line.is_none() && c.original_line.is_some(),
+        }
+    }
+}
+
+fn pr_search_query(owner: &str, repo: &str, state: PrState, filters: &PrSearchFilters, text: &str) -> String {
+    let quoted = |value: &str| format!("\"{}\"", value.replace('"', "\\\""));
+    let mut parts = vec!["is:pr".to_string(), format!("repo:{owner}/{repo}")];
+    match state {
+        PrState::Open => parts.push("state:open".into()),
+        PrState::Closed => parts.push("state:closed".into()),
+        PrState::All => {}
+    }
+    for author in &filters.authors {
+        parts.push(format!("author:{author}"));
+    }
+    for label in &filters.labels {
+        parts.push(format!("label:{}", quoted(label)));
+    }
+    for assignee in &filters.assignees {
+        parts.push(format!("assignee:{assignee}"));
+    }
+    if let Some(review) = &filters.review_status {
+        parts.push(if review.contains(':') { review.clone() } else { format!("review:{review}") });
+    }
+    if !text.trim().is_empty() {
+        parts.push(quoted(text.trim()));
+    }
+    parts.join(" ")
+}
+
+#[async_trait]
+impl GitProvider for GithubProvider {
+    async fn validate_token(&self) -> Result<ProviderUser> {
+        let user: GhUser = self.get("https://api.github.com/user").await?;
+        Ok(ProviderUser {
+            login: user.login,
+            avatar_url: user.avatar_url,
+            name: user.name,
+        })
+    }
+
+    async fn list_pull_requests(
+        &self,
+        owner: &str,
+        repo: &str,
+        state: PrState,
+        page: u32,
+        per_page: u32,
+    ) -> Result<PaginatedResult<PullRequest>> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls?state={}&per_page={}&page={}&sort=updated&direction=desc",
+            owner, repo, state, per_page, page
+        );
+
+        let (items, has_next): (Vec<GhPullRequest>, bool) =
+            self.get_with_pagination(&url).await?;
+        let mut items: Vec<PullRequest> = items.into_iter().map(Into::into).collect();
+        self.fill_list_stats(owner, repo, &mut items).await;
+
+        Ok(PaginatedResult {
+            items,
+            page,
+            has_next_page: has_next,
+            total_count: None,
+        })
+    }
+
+    async fn get_pull_request(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<PullRequest> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}",
+            owner, repo, number
+        );
+        let pr: GhPullRequest = self.get(&url).await?;
+        Ok(pr.into())
+    }
+
+    async fn get_pr_files(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        page: u32,
+    ) -> Result<PaginatedResult<PrFile>> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}/files?per_page=100&page={}",
+            owner, repo, number, page
+        );
+
+        let (items, has_next): (Vec<GhPrFile>, bool) =
+            self.get_with_pagination(&url).await?;
+
+        Ok(PaginatedResult {
+            items: items.into_iter().map(Into::into).collect(),
+            page,
+            has_next_page: has_next,
+            total_count: None,
+        })
+    }
+
+    async fn get_pr_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<ReviewComment>> {
+        let mut all_comments = Vec::new();
+        let mut page = 1u32;
+
+        loop {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/pulls/{}/comments?per_page=100&page={}",
+                owner, repo, number, page
+            );
+
+            let (items, has_next): (Vec<GhReviewComment>, bool) =
+                self.get_with_pagination(&url).await?;
+
+            all_comments.extend(items.into_iter().map(ReviewComment::from));
+
+            if !has_next {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(all_comments)
+    }
+
+    async fn get_issue_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<IssueComment>> {
+        let mut all_comments = Vec::new();
+        let mut page = 1u32;
+
+        loop {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/issues/{}/comments?per_page=100&page={}",
+                owner, repo, number, page
+            );
+
+            let (items, has_next): (Vec<GhIssueComment>, bool) =
+                self.get_with_pagination(&url).await?;
+
+            all_comments.extend(items.into_iter().map(IssueComment::from));
+
+            if !has_next {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(all_comments)
+    }
+
+    async fn get_pr_reviews(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<PrReview>> {
+        let mut all_reviews = Vec::new();
+        let mut page = 1u32;
+
+        loop {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/pulls/{}/reviews?per_page=100&page={}",
+                owner, repo, number, page
+            );
+
+            let (items, has_next): (Vec<GhPrReview>, bool) =
+                self.get_with_pagination(&url).await?;
+
+            all_reviews.extend(items.into_iter().map(PrReview::from));
+
+            if !has_next {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(all_reviews)
+    }
+
+    async fn add_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        params: NewComment,
+    ) -> Result<ReviewComment> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}/comments",
+            owner, repo, number
+        );
+
+        let comment: GhReviewComment = self.post(&url, &new_comment_body(&params)).await?;
+        Ok(comment.into())
+    }
+
+    async fn create_pending_review(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        commit_id: &str,
+    ) -> Result<PrReview> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}/reviews",
+            owner, repo, number
+        );
+        // No `event` = the review stays PENDING.
+        let payload = serde_json::json!({ "commit_id": commit_id });
+        let review: GhPrReview = self.post(&url, &payload).await?;
+        Ok(review.into())
+    }
+
+    async fn add_review_comment(
+        &self,
+        review_node_id: &str,
+        params: NewComment,
+    ) -> Result<ReviewComment> {
+        const MUTATION: &str = r#"
+            mutation($input: AddPullRequestReviewThreadInput!) {
+                addPullRequestReviewThread(input: $input) {
+                    thread {
+                        comments(first: 1) {
+                            nodes {
+                                databaseId path line originalLine diffHunk body
+                                author { login avatarUrl }
+                                createdAt updatedAt url
+                                pullRequestReview { databaseId }
+                            }
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let mut input = serde_json::json!({
+            "pullRequestReviewId": review_node_id,
+            "path": params.path,
+            "line": params.line,
+            "side": params.side,
+            "body": params.body,
+        });
+        if let Some(start) = params.start_line {
+            input["startLine"] = start.into();
+            input["startSide"] = params.side.clone().into();
+        }
+
+        let data = self.graphql(MUTATION, serde_json::json!({ "input": input })).await?;
+        let node = &data["addPullRequestReviewThread"]["thread"]["comments"]["nodes"][0];
+        review_comment_from_graphql(node, &params.side)
+    }
+
+    async fn get_review_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        review_id: u64,
+    ) -> Result<Vec<ReviewComment>> {
+        let mut all_comments = Vec::new();
+        let mut page = 1u32;
+
+        loop {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/pulls/{}/reviews/{}/comments?per_page=100&page={}",
+                owner, repo, number, review_id, page
+            );
+
+            let (items, has_next): (Vec<GhReviewComment>, bool) =
+                self.get_with_pagination(&url).await?;
+
+            all_comments.extend(items.into_iter().map(ReviewComment::from));
+
+            if !has_next {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(all_comments)
+    }
+
+    async fn submit_review(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        pending_id: Option<u64>,
+        event: ReviewEvent,
+        body: &str,
+    ) -> Result<()> {
+        let base = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}/reviews",
+            owner, repo, number
+        );
+        let url = match pending_id {
+            Some(id) => format!("{}/{}/events", base, id),
+            None => base,
+        };
+        let payload = serde_json::json!({ "event": event.as_str(), "body": body });
+        let _: serde_json::Value = self.post(&url, &payload).await?;
+        Ok(())
+    }
+
+    async fn delete_pending_review(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        review_id: u64,
+    ) -> Result<()> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}/reviews/{}",
+            owner, repo, number, review_id
+        );
+        self.delete_request(&url).await
+    }
+
+    async fn reply_to_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        comment_id: u64,
+        body: &str,
+    ) -> Result<ReviewComment> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}/comments",
+            owner, repo, number
+        );
+
+        let payload = serde_json::json!({
+            "body": body,
+            "in_reply_to": comment_id,
+        });
+
+        let comment: GhReviewComment = self.post(&url, &payload).await?;
+        Ok(comment.into())
+    }
+
+    async fn list_user_repos(
+        &self,
+        page: u32,
+        per_page: u32,
+    ) -> Result<PaginatedResult<RepoInfo>> {
+        let url = format!(
+            "https://api.github.com/user/repos?sort=pushed&direction=desc&per_page={}&page={}&type=all",
+            per_page, page
+        );
+
+        let (items, has_next): (Vec<GhRepo>, bool) =
+            self.get_with_pagination(&url).await?;
+
+        Ok(PaginatedResult {
+            items: items.into_iter().map(Into::into).collect(),
+            page,
+            has_next_page: has_next,
+            total_count: None,
+        })
+    }
+
+    async fn search_repos(
+        &self,
+        query: &str,
+        page: u32,
+        per_page: u32,
+    ) -> Result<PaginatedResult<RepoInfo>> {
+        let url = format!(
+            "https://api.github.com/search/repositories?q={}&sort=updated&per_page={}&page={}",
+            urlencoding(query), per_page, page
+        );
+
+        let result: GhSearchResult = self.get(&url).await?;
+        let has_next = (page * per_page) < result.total_count as u32;
+
+        Ok(PaginatedResult {
+            items: result.items.into_iter().map(Into::into).collect(),
+            page,
+            has_next_page: has_next,
+            total_count: Some(result.total_count),
+        })
+    }
+
+    async fn update_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        comment_id: u64,
+        body: &str,
+    ) -> Result<ReviewComment> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/comments/{}",
+            owner, repo, comment_id
+        );
+        let payload = serde_json::json!({ "body": body });
+        let comment: GhReviewComment = self.patch(&url, &payload).await?;
+        Ok(comment.into())
+    }
+
+    async fn delete_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        comment_id: u64,
+    ) -> Result<()> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/comments/{}",
+            owner, repo, comment_id
+        );
+        self.delete_request(&url).await
+    }
+
+    async fn search_pull_requests(
+        &self,
+        owner: &str,
+        repo: &str,
+        state: PrState,
+        filters: &PrSearchFilters,
+        query: &str,
+        page: u32,
+        per_page: u32,
+    ) -> Result<PaginatedResult<PullRequest>> {
+        let query = pr_search_query(owner, repo, state, filters, query);
+        let url = format!(
+            "https://api.github.com/search/issues?q={}&sort=updated&order=desc&per_page={}&page={}",
+            urlencoding(&query), per_page, page
+        );
+
+        let result: GhSearchResult2 = self.get(&url).await?;
+        let has_next = (page as u64 * per_page as u64) < result.total_count.min(1000);
+        let mut items: Vec<PullRequest> = result.items.into_iter().map(Into::into).collect();
+        self.fill_list_stats(owner, repo, &mut items).await;
+
+        Ok(PaginatedResult {
+            items,
+            page,
+            has_next_page: has_next,
+            total_count: Some(result.total_count),
+        })
+    }
+
+    async fn list_repo_labels(
+        &self,
+        owner: &str,
+        repo: &str,
+    ) -> Result<Vec<Label>> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/labels?per_page=100",
+            owner, repo
+        );
+        let (items, _): (Vec<GhLabel>, bool) = self.get_with_pagination(&url).await?;
+        Ok(items.into_iter().map(|l| Label { name: l.name, color: l.color }).collect())
+    }
+
+    async fn get_thread_resolutions(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<ThreadResolutionInfo>> {
+        const QUERY: &str = r#"
+            query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+                repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $number) {
+                        reviewThreads(first: 100, after: $cursor) {
+                            pageInfo { hasNextPage endCursor }
+                            nodes {
+                                id
+                                isResolved
+                                comments(first: 1) {
+                                    nodes { databaseId }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let mut results = Vec::new();
+        let mut cursor: Option<String> = None;
+
+        loop {
+            let variables = serde_json::json!({
+                "owner": owner,
+                "repo": repo,
+                "number": number as i64,
+                "cursor": cursor,
+            });
+
+            let data = self.graphql(QUERY, variables).await?;
+
+            let threads = &data["repository"]["pullRequest"]["reviewThreads"];
+            let nodes = threads["nodes"]
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("Invalid GraphQL response structure"))?;
+
+            for node in nodes {
+                let thread_node_id = node["id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                let is_resolved = node["isResolved"].as_bool().unwrap_or(false);
+                let root_comment_id = node["comments"]["nodes"]
+                    .as_array()
+                    .and_then(|arr| arr.first())
+                    .and_then(|c| c["databaseId"].as_u64())
+                    .unwrap_or(0);
+
+                if root_comment_id > 0 {
+                    results.push(ThreadResolutionInfo {
+                        root_comment_id,
+                        thread_node_id,
+                        is_resolved,
+                    });
+                }
+            }
+
+            let page_info = &threads["pageInfo"];
+            if page_info["hasNextPage"].as_bool().unwrap_or(false) {
+                cursor = page_info["endCursor"].as_str().map(String::from);
+            } else {
+                break;
+            }
+        }
+
+        Ok(results)
+    }
+
+    async fn resolve_thread(&self, thread_node_id: &str) -> Result<()> {
+        const MUTATION: &str = r#"
+            mutation($threadId: ID!) {
+                resolveReviewThread(input: { threadId: $threadId }) {
+                    thread { isResolved }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({ "threadId": thread_node_id });
+        self.graphql(MUTATION, variables).await?;
+        Ok(())
+    }
+
+    async fn unresolve_thread(&self, thread_node_id: &str) -> Result<()> {
+        const MUTATION: &str = r#"
+            mutation($threadId: ID!) {
+                unresolveReviewThread(input: { threadId: $threadId }) {
+                    thread { isResolved }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({ "threadId": thread_node_id });
+        self.graphql(MUTATION, variables).await?;
+        Ok(())
+    }
+
+    async fn get_pr_commits(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Vec<Commit>> {
+        let mut all_commits = Vec::new();
+        let mut page = 1u32;
+
+        loop {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/pulls/{}/commits?per_page=100&page={}",
+                owner, repo, number, page
+            );
+
+            let (items, has_next): (Vec<GhCommit>, bool) =
+                self.get_with_pagination(&url).await?;
+
+            all_commits.extend(items.into_iter().map(Commit::from));
+
+            if !has_next {
+                break;
+            }
+            page += 1;
+        }
+
+        Ok(all_commits)
+    }
+
+    async fn get_compare_files(
+        &self,
+        owner: &str,
+        repo: &str,
+        base: &str,
+        head: &str,
+    ) -> Result<Vec<PrFile>> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/compare/{}...{}",
+            owner, repo, base, head
+        );
+
+        let result: GhCompareResponse = self.get(&url).await?;
+        Ok(result.files.unwrap_or_default().into_iter().map(Into::into).collect())
+    }
+
+    async fn get_file_content(
+        &self,
+        owner: &str,
+        repo: &str,
+        path: &str,
+        ref_: &str,
+    ) -> Result<String> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/contents/{}?ref={}",
+            owner, repo, path, ref_
+        );
+        self.get_raw(&url).await
+    }
+
+    /// Undocumented endpoint used by `gh --attach`; may change without notice.
+    /// See https://github.com/cli/cli/issues/14495 (needs `token`, not `Bearer`).
+    async fn upload_attachment(
+        &self,
+        owner: &str,
+        repo: &str,
+        name: &str,
+        content_type: &str,
+        bytes: Vec<u8>,
+    ) -> Result<String> {
+        #[derive(Deserialize)]
+        struct RepoId {
+            id: u64,
+        }
+        #[derive(Deserialize)]
+        struct Asset {
+            url: String,
+        }
+
+        // ponytail: one extra GET per upload; cache the id if uploads feel slow.
+        let RepoId { id } = self.get(&format!("https://api.github.com/repos/{}/{}", owner, repo)).await?;
+        let response = self
+            .client
+            .post("https://uploads.github.com/user-attachments/assets")
+            .query(&[("name", name), ("content_type", content_type), ("repository_id", &id.to_string())])
+            .header("Authorization", format!("token {}", self.token))
+            .header("Content-Type", "application/octet-stream")
+            .header("Accept", "application/json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .body(bytes)
+            .send()
+            .await
+            .context("Network request failed")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            bail!("GitHub upload error {}: {}", status, body);
+        }
+
+        let asset: Asset = response.json().await.context("Failed to parse upload response")?;
+        Ok(asset.url)
+    }
+
+    /// Private-repo attachments 404 without auth; with the token GitHub redirects to a
+    /// signed S3 URL that is valid for 5 minutes.
+    async fn resolve_attachment(&self, url: &str) -> Result<String> {
+        // Never send the token anywhere but github.com.
+        if !url.starts_with("https://github.com/") {
+            bail!("Not a GitHub attachment URL: {}", url);
+        }
+        let client = Client::builder()
+            .user_agent("Revisor/1.0.0")
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .context("Failed to create HTTP client")?;
+        let response = client
+            .get(url)
+            .header("Authorization", format!("token {}", self.token))
+            .send()
+            .await
+            .context("Network request failed")?;
+        let status = response.status();
+        match response.headers().get(reqwest::header::LOCATION).and_then(|l| l.to_str().ok()) {
+            Some(location) if status.is_redirection() => Ok(location.to_string()),
+            _ if status == reqwest::StatusCode::NOT_FOUND => {
+                bail!("GitHub did not find the attachment, or you have no access to its repository")
+            }
+            _ => bail!("GitHub returned {} for the attachment", status),
+        }
+    }
+
+    fn rate_limit_status(&self) -> RateLimitInfo {
+        self.rate_limit.info()
+    }
+}
+
+/// Simple URL encoding for query parameters
+fn urlencoding(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                String::from(b as char)
+            }
+            b' ' => "+".to_string(),
+            _ => format!("%{:02X}", b),
+        })
+        .collect()
+}
+
+fn new_comment_body(params: &NewComment) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "body": params.body,
+        "commit_id": params.commit_id,
+        "path": params.path,
+        "line": params.line,
+        "side": params.side,
+    });
+    if let Some(start) = params.start_line {
+        body["start_line"] = start.into();
+        body["start_side"] = params.side.clone().into();
+    }
+    body
+}
+
+/// Copy counts from the `fill_list_stats` response (`p<number>` aliases) into `prs`.
+/// `totalCommentsCount` already includes review comments.
+fn apply_list_stats(repository: &serde_json::Value, prs: &mut [PullRequest]) {
+    for pr in prs {
+        let node = &repository[format!("p{}", pr.number)];
+        let count = |key: &str| node[key].as_u64();
+        let Some(additions) = count("additions") else { continue };
+        pr.additions = additions;
+        pr.deletions = count("deletions").unwrap_or(0);
+        pr.changed_files = count("changedFiles").unwrap_or(0);
+        pr.comments_count = count("totalCommentsCount").unwrap_or(0);
+        pr.review_comments_count = 0;
+    }
+}
+
+/// Map a GraphQL `PullRequestReviewComment` node to `ReviewComment`.
+/// `side` comes from the request: the node has no plain side field.
+fn review_comment_from_graphql(node: &serde_json::Value, side: &str) -> Result<ReviewComment> {
+    let id = node["databaseId"]
+        .as_u64()
+        .ok_or_else(|| anyhow::anyhow!("GraphQL review comment missing databaseId"))?;
+    let text = |key: &str| node[key].as_str().unwrap_or_default().to_string();
+    let line = node["line"].as_u64();
+    let original_line = node["originalLine"].as_u64();
+    Ok(ReviewComment {
+        id,
+        path: text("path"),
+        line,
+        original_line,
+        side: Some(side.to_string()),
+        diff_hunk: text("diffHunk"),
+        body: text("body"),
+        author_login: node["author"]["login"].as_str().unwrap_or_default().to_string(),
+        author_avatar: node["author"]["avatarUrl"].as_str().unwrap_or_default().to_string(),
+        created_at: text("createdAt"),
+        updated_at: text("updatedAt"),
+        in_reply_to_id: None,
+        review_id: node["pullRequestReview"]["databaseId"].as_u64(),
+        html_url: text("url"),
+        outdated: line.is_none() && original_line.is_some(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pr_search_query_includes_text_state_and_filters() {
+        let filters = PrSearchFilters {
+            authors: vec!["alice".into()],
+            labels: vec!["needs review".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            pr_search_query("org", "repo", PrState::Open, &filters, "  fix login  "),
+            "is:pr repo:org/repo state:open author:alice label:\"needs review\" \"fix login\""
+        );
+        assert_eq!(
+            pr_search_query("org", "repo", PrState::All, &PrSearchFilters::default(), ""),
+            "is:pr repo:org/repo"
+        );
+    }
+
+    #[test]
+    fn new_comment_body_adds_range_only_when_set() {
+        let mut params = NewComment {
+            path: "a.rs".into(),
+            line: 14,
+            side: "RIGHT".into(),
+            body: "x".into(),
+            commit_id: "sha".into(),
+            start_line: None,
+        };
+        assert!(new_comment_body(&params).get("start_line").is_none());
+        params.start_line = Some(10);
+        let body = new_comment_body(&params);
+        assert_eq!(body["start_line"], 10);
+        assert_eq!(body["start_side"], "RIGHT");
+        assert_eq!(body["line"], 14);
+    }
+
+    #[test]
+    fn review_comment_from_graphql_maps_fields() {
+        let node = serde_json::json!({
+            "databaseId": 42,
+            "path": "a.rs",
+            "line": 14,
+            "originalLine": 14,
+            "diffHunk": "@@ -1 +1 @@",
+            "body": "nit",
+            "author": { "login": "me", "avatarUrl": "https://a" },
+            "createdAt": "2026-01-01T00:00:00Z",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "url": "https://github.com/o/r/pull/1#discussion_r42",
+            "pullRequestReview": { "databaseId": 7 },
+        });
+        let c = review_comment_from_graphql(&node, "LEFT").unwrap();
+        assert_eq!(c.id, 42);
+        assert_eq!(c.line, Some(14));
+        assert_eq!(c.side.as_deref(), Some("LEFT"));
+        assert_eq!(c.review_id, Some(7));
+        assert_eq!(c.author_login, "me");
+        assert!(!c.outdated);
+        assert!(review_comment_from_graphql(&serde_json::Value::Null, "RIGHT").is_err());
+    }
+
+    #[test]
+    fn apply_list_stats_fills_counts_by_alias() {
+        let pr = |number: u64| -> PullRequest {
+            let item: GhSearchIssueItem = serde_json::from_value(serde_json::json!({
+                "id": number, "number": number, "title": "t", "body": null, "state": "open", "draft": false,
+                "user": { "login": "me", "avatar_url": "" }, "labels": [], "assignees": [],
+                "created_at": "", "updated_at": "", "pull_request": null, "html_url": "",
+            }))
+            .unwrap();
+            item.into()
+        };
+        let mut prs = vec![pr(1), pr(2)];
+        let repository = serde_json::json!({
+            "p1": { "additions": 10, "deletions": 3, "changedFiles": 2, "totalCommentsCount": 5 },
+            "p2": null,
+        });
+        apply_list_stats(&repository, &mut prs);
+        assert_eq!((prs[0].additions, prs[0].deletions, prs[0].changed_files, prs[0].comments_count), (10, 3, 2, 5));
+        assert_eq!((prs[1].additions, prs[1].comments_count), (0, 0));
+    }
+
+    #[test]
+    fn pr_load_error_words_status() {
+        let err = |status, body: &str| anyhow::Error::from(ApiError { status, body: body.into() });
+        let msg = |e: anyhow::Error| pr_load_error(&e, "o", "r", 7);
+        assert!(msg(err(404, "")).starts_with("o/r#7 does not exist"));
+        assert!(msg(err(401, "")).contains("did not accept your sign-in"));
+        assert!(msg(err(403, "API rate limit exceeded for user")).contains("rate limit exceeded"));
+        assert!(msg(err(429, "secondary rate limit")).contains("rate limit exceeded"));
+        assert!(msg(err(403, "Resource protected by SAML")).contains("refused access to o/r"));
+        assert_eq!(msg(err(500, "boom")), "GitHub API error 500 Internal Server Error: boom");
+        assert_eq!(msg(anyhow::anyhow!("Network request failed")), "Network request failed");
+    }
+}

@@ -9,7 +9,7 @@ export function PRListSearch(props: PRListSearchProps) {
   return (
     <Input
       type="text"
-      placeholder="Filter pull requests..."
+      placeholder="Search pull requests..."
       value={props.value}
       onInput={(e) => props.onChange(e.currentTarget.value)}
       class="text-xs"

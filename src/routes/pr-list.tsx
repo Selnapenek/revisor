@@ -1,8 +1,8 @@
-import { createEffect, createSignal, onMount, Show, For, onCleanup } from "solid-js";
+import { createEffect, createSignal, onMount, Show, For, onCleanup, untrack } from "solid-js";
 import { useParams, useNavigate } from "@solidjs/router";
 import { createVirtualizer } from "@tanstack/solid-virtual";
-import { listPullRequests, searchPullRequests } from "~/api";
-import { prListStore, reposStore, uiStore, prFiltersStore } from "~/stores";
+import { searchPullRequests } from "~/api";
+import { authStore, prListStore, reposStore, uiStore, prFiltersStore } from "~/stores";
 import type { PrFilter } from "~/stores/pr-list.store";
 import { PRListItem } from "~/components/pr-list/PRListItem";
 import { prefetch, cancelPrefetch } from "~/lib/prefetch-cache";
@@ -11,6 +11,9 @@ import { PRListSearch } from "~/components/pr-list/PRListSearch";
 import { PRListAdvancedFilters } from "~/components/pr-list/PRListAdvancedFilters";
 import { Button } from "~/components/ui/Button";
 import { Spinner } from "~/components/ui/Spinner";
+import { createPrListCache, prListQueryKey } from "~/lib/pr-list-cache";
+
+const queryCache = createPrListCache();
 
 export default function PRListPage() {
   const params = useParams<{ owner: string; repo: string }>();
@@ -18,14 +21,39 @@ export default function PRListPage() {
   let scrollRef!: HTMLDivElement;
 
   const currentKey = `${params.owner}/${params.repo}`;
-  const hasCachedData = prListStore.repoKey === currentKey && prListStore.prs.length > 0;
-
-  const [showLoader, setShowLoader] = createSignal(!hasCachedData);
+  const [showLoader, setShowLoader] = createSignal(true);
   const [isRefreshing, setIsRefreshing] = createSignal(false);
 
   let initialized = false;
+  let requestId = 0;
+  let lastState = prListStore.filter;
+  let lastSearch = prListStore.searchQuery;
+  let lastFilters = JSON.stringify(prFiltersStore.activeFilters);
+
+  const queryKey = () => prListQueryKey(
+    `${authStore.user?.login ?? ""}:${currentKey}`,
+    prListStore.filter,
+    prFiltersStore.activeFilters,
+    prListStore.searchQuery,
+  );
+
+  const restoreQuery = () => {
+    requestId++;
+    const cached = queryCache.get(queryKey());
+    prListStore.setPrs(cached?.items ?? []);
+    prListStore.setPage(cached?.page ?? 1);
+    prListStore.setHasNextPage(cached?.hasNextPage ?? false);
+    prListStore.setTotalCount(cached?.totalCount ?? null);
+    prListStore.setIsLoadingMore(false);
+    setIsRefreshing(!!cached);
+    setShowLoader(!cached);
+    if (scrollRef) scrollRef.scrollTop = 0;
+    return !!cached;
+  };
 
   const fetchPrs = async (pageNum: number, append = false, silent = false) => {
+    const currentRequest = ++requestId;
+    const currentKey = queryKey();
     if (!append) {
       if (!silent) setShowLoader(true);
       else setIsRefreshing(true);
@@ -34,22 +62,16 @@ export default function PRListPage() {
     }
 
     try {
-      const result = prFiltersStore.hasActiveFilters
-        ? await searchPullRequests(
-            params.owner,
-            params.repo,
-            prListStore.filter,
-            prFiltersStore.activeFilters,
-            pageNum,
-            30,
-          )
-        : await listPullRequests(
-            params.owner,
-            params.repo,
-            prListStore.filter,
-            pageNum,
-            30,
-          );
+      const result = await searchPullRequests(
+        params.owner,
+        params.repo,
+        prListStore.filter,
+        prFiltersStore.activeFilters,
+        prListStore.searchQuery.trim(),
+        pageNum,
+        30,
+      );
+      if (currentRequest !== requestId) return;
 
       if (append) {
         prListStore.appendPrs(result.items);
@@ -58,11 +80,20 @@ export default function PRListPage() {
       }
       prListStore.setPage(pageNum);
       prListStore.setHasNextPage(result.has_next_page);
+      prListStore.setTotalCount(result.total_count);
+      queryCache.set(currentKey, {
+        items: prListStore.prs,
+        page: pageNum,
+        hasNextPage: result.has_next_page,
+        totalCount: result.total_count,
+      });
 
       prFiltersStore.updateKnownUsersFromPrs(result.items);
     } catch (err) {
+      if (currentRequest !== requestId) return;
       uiStore.showError(`Failed to load PRs: ${err}`);
     } finally {
+      if (currentRequest !== requestId) return;
       setShowLoader(false);
       setIsRefreshing(false);
       prListStore.setIsLoadingMore(false);
@@ -71,16 +102,13 @@ export default function PRListPage() {
 
   onMount(() => {
     reposStore.setCurrentRepo({ owner: params.owner, repo: params.repo });
-
+    if (prListStore.repoKey !== currentKey) prListStore.clearAll();
     prListStore.setRepoKey(currentKey);
     prFiltersStore.loadForRepository(currentKey);
-
-    if (hasCachedData) {
-      fetchPrs(1, false, true);
-    } else {
-      prListStore.clearAll();
-      fetchPrs(1);
-    }
+    fetchPrs(1, false, restoreQuery());
+    lastState = prListStore.filter;
+    lastSearch = prListStore.searchQuery;
+    lastFilters = JSON.stringify(prFiltersStore.activeFilters);
 
     prFiltersStore.fetchLabels(params.owner, params.repo);
     initialized = true;
@@ -89,29 +117,46 @@ export default function PRListPage() {
   let alive = true;
   onCleanup(() => {
     alive = false;
+    requestId++;
     prFiltersStore.reset();
     clearTimeout(filterDebounce);
+    clearTimeout(searchDebounce);
   });
 
   createEffect(() => {
-    const _filter = prListStore.filter;
-    if (!initialized) return;
-    fetchPrs(1);
+    const state = prListStore.filter;
+    if (!initialized || state === lastState) return;
+    lastState = state;
+    untrack(() => fetchPrs(1, false, restoreQuery()));
+  });
+
+  let searchDebounce: ReturnType<typeof setTimeout> | undefined;
+  createEffect(() => {
+    const query = prListStore.searchQuery;
+    if (!initialized || query === lastSearch) return;
+    lastSearch = query;
+    untrack(restoreQuery);
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => {
+      if (alive) fetchPrs(1, false, !!queryCache.get(queryKey()));
+    }, 300);
   });
 
   let filterDebounce: ReturnType<typeof setTimeout> | undefined;
   createEffect(() => {
-    const _filters = JSON.stringify(prFiltersStore.activeFilters);
-    if (!initialized) return;
+    const filters = JSON.stringify(prFiltersStore.activeFilters);
+    if (!initialized || filters === lastFilters) return;
+    lastFilters = filters;
+    untrack(restoreQuery);
     clearTimeout(filterDebounce);
     filterDebounce = setTimeout(() => {
       if (!alive) return;
-      fetchPrs(1);
+      fetchPrs(1, false, !!queryCache.get(queryKey()));
     }, 300);
   });
 
   const loadMore = () => {
-    if (prListStore.hasNextPage && !prListStore.isLoadingMore) {
+    if (prListStore.hasNextPage && !prListStore.isLoadingMore && !isRefreshing() && !showLoader()) {
       fetchPrs(prListStore.page + 1, true);
     }
   };
@@ -129,7 +174,7 @@ export default function PRListPage() {
   };
 
   // Virtual scrolling
-  const items = () => prListStore.filteredPrs;
+  const items = () => prListStore.prs;
 
   const virtualizer = createVirtualizer({
     get count() { return items().length; },
@@ -159,6 +204,9 @@ export default function PRListPage() {
           <span class="text-(--color-text-muted) mx-0.5">/</span>
           <span class="font-semibold text-(--color-text-primary)">{params.repo}</span>
         </span>
+        <span class="text-xs text-(--color-text-muted)">
+          {prListStore.totalCount ?? "…"} pull requests
+        </span>
         <div class="ml-auto flex items-center gap-3">
           <PRListSearch
             value={prListStore.searchQuery}
@@ -186,7 +234,7 @@ export default function PRListPage() {
         {/* Empty state */}
         <Show when={!showLoader() && items().length === 0}>
           <div class="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-(--color-text-muted)">
-            <span>{prFiltersStore.hasActiveFilters ? "No pull requests match the active filters" : "No pull requests found"}</span>
+            <span>{prFiltersStore.hasActiveFilters || prListStore.searchQuery ? "No pull requests match the search or filters" : "No pull requests found"}</span>
             <Show when={prFiltersStore.hasActiveFilters}>
               <button
                 class="text-xs text-(--color-accent-fg) hover:underline cursor-pointer"

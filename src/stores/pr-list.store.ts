@@ -8,6 +8,7 @@ const [filter, setFilter] = createSignal<PrFilter>("open");
 const [searchQuery, setSearchQuery] = createSignal("");
 const [page, setPage] = createSignal(1);
 const [hasNextPage, setHasNextPage] = createSignal(false);
+const [totalCount, setTotalCount] = createSignal<number | null>(null);
 const [isLoadingMore, setIsLoadingMore] = createSignal(false);
 const [repoKey, setRepoKey] = createSignal("");
 
@@ -17,25 +18,16 @@ export const prListStore = {
   get searchQuery() { return searchQuery(); },
   get page() { return page(); },
   get hasNextPage() { return hasNextPage(); },
+  get totalCount() { return totalCount(); },
   get isLoadingMore() { return isLoadingMore(); },
   get repoKey() { return repoKey(); },
-
-  get filteredPrs() {
-    const q = searchQuery().toLowerCase();
-    if (!q) return prs();
-    return prs().filter(
-      (pr) =>
-        pr.title.toLowerCase().includes(q) ||
-        pr.author_login.toLowerCase().includes(q) ||
-        String(pr.number).includes(q),
-    );
-  },
 
   setPrs,
   setFilter,
   setSearchQuery,
   setPage,
   setHasNextPage,
+  setTotalCount,
   setIsLoadingMore,
   setRepoKey,
 
@@ -47,6 +39,7 @@ export const prListStore = {
     setPrs([]);
     setPage(1);
     setHasNextPage(false);
+    setTotalCount(null);
     setSearchQuery("");
   },
 };
