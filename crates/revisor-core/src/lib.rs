@@ -10,6 +10,7 @@ pub mod focus;
 pub mod keyring;
 pub mod oauth;
 pub mod pr_filters;
+pub mod pr_list_cache;
 pub mod provider;
 pub mod rank_findings;
 pub mod semantic;

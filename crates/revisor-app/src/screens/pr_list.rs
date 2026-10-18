@@ -19,6 +19,7 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::*, *};
 use revisor_core::cache::queries;
 use revisor_core::pr_filters::{self, REVIEW_REQUESTED_ME, REVIEW_STATUS_OPTIONS};
+use revisor_core::pr_list_cache::{PrListCache, PrListQuery, PrListSnapshot};
 use revisor_core::provider::types::{Label, PrSearchFilters, PrState, PrUser, PullRequest};
 use revisor_core::time::relative_time;
 use std::{collections::HashMap, ops::Range, time::Duration};
@@ -54,6 +55,7 @@ pub struct PrListScreen {
     label_search: Entity<InputState>,
     assignee_search: Entity<InputState>,
     prs: Vec<PullRequest>,
+    cache: PrListCache,
     total_count: Option<u64>,
     /// PR number to when the user last had it open.
     views: HashMap<u64, String>,
@@ -139,6 +141,7 @@ impl PrListScreen {
             label_search,
             assignee_search,
             prs: Vec::new(),
+            cache: PrListCache::default(),
             total_count: None,
             views: HashMap::new(),
             visible: Vec::new(),
@@ -163,13 +166,39 @@ impl PrListScreen {
     pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.focus.focus(window, cx);
         self.load(1, window, cx);
+    }
+
+    fn query_key(&self, cx: &Context<Self>) -> PrListQuery {
+        PrListQuery::new(&self.owner, &self.repo, STATES[self.state], &self.filters, &self.search.read(cx).value())
+    }
+
+    fn restore_query(&mut self, cx: &mut Context<Self>) {
+        self._load = Task::ready(());
+        let query = self.query_key(cx);
+        if let Some(snapshot) = self.cache.get(&query) {
+            self.prs = snapshot.items;
+            self.page = snapshot.page;
+            self.has_next = snapshot.has_next_page;
+            self.total_count = snapshot.total_count;
+            self.loaded = true;
+        } else {
+            self.prs.clear();
+            self.page = 1;
+            self.has_next = false;
+            self.total_count = None;
+            self.loaded = false;
+        }
         self.refreshing = self.loaded;
+        self.error = None;
+        self.scroll.scroll_to_item(0, ScrollStrategy::Top);
+        cx.notify();
     }
 
     /// Page 1 replaces the list, later pages append. Replacing `_load` drops the stale request.
     fn load(&mut self, page: u32, window: &mut Window, cx: &mut Context<Self>) {
         self.loading = true;
-        self.refreshing = false;
+        self.refreshing = page == 1 && self.loaded;
+        let cache_key = self.query_key(cx);
         let (owner, repo, state, filters, query) =
             (self.owner.to_string(), self.repo.to_string(), STATES[self.state], self.filters.clone(), self.search.read(cx).value().to_string());
         self._load = backend::spawn(
@@ -211,6 +240,12 @@ impl PrListScreen {
                         this.total_count = result.total_count;
                         this.loaded = true;
                         this.error = None;
+                        this.cache.insert(cache_key, PrListSnapshot {
+                            items: this.prs.clone(),
+                            page: this.page,
+                            has_next_page: this.has_next,
+                            total_count: this.total_count,
+                        });
                     }
                     Err(e) if refreshing => {
                         window.push_notification(Notification::error(format!("Failed to refresh PRs: {e}")), cx);
@@ -260,14 +295,13 @@ impl PrListScreen {
 
     fn select_state(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.state = ix;
+        self._debounce = Task::ready(());
+        self.restore_query(cx);
         self.load(1, window, cx);
     }
 
     fn schedule_reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self._load = Task::ready(());
-        self.prs.clear();
-        self.total_count = None;
-        self.has_next = false;
+        self.restore_query(cx);
         self.loading = true;
         self._debounce = cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(Duration::from_millis(300)).await;
