@@ -439,7 +439,6 @@ impl PrDetailScreen {
         let selected = if !experimental::enabled(cx) && self.tab == SidebarTab::Semantic { SidebarTab::Files as usize } else { self.tab as usize };
         v_flex()
             .size_full()
-            .when(!model.commits.is_empty(), |el| el.child(commits::CommitSelector::new(self.model.clone())))
             .child(
                 TabBar::new("sidebar-tabs")
                     .selected_index(selected)

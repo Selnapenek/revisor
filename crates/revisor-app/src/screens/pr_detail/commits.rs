@@ -107,28 +107,24 @@ impl RenderOnce for CommitSelector {
                         .child(format!("{} · {}", c.author_login, relative_time(&c.authored_date))),
                 )
         });
-        div().flex_shrink_0().px_2().py_1().border_b_1().border_color(theme.border).child(
-            Popover::new("commit-selector")
-                .w(px(360.))
-                .trigger(
-                    Button::new("commit-selector-trigger")
-                        .ghost()
-                        .small()
-                        .w_full()
-                        .label(m.commit_selection_label())
-                        .dropdown_caret(true)
-                        .loading(m.files_loading),
-                )
-                .child(all)
-                .child(
-                    div()
-                        .px_3()
-                        .py_1()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child("Click to select · Shift+click for range"),
-                )
-                .child(v_flex().id("commit-list").max_h(px(400.)).overflow_y_scrollbar().children(commits)),
-        )
+        Popover::new("commit-selector")
+            .w(px(360.))
+            .trigger(
+                Button::new("commit-selector-trigger")
+                    .ghost()
+                    .xsmall()
+                    .label(m.commit_selection_label())
+                    .dropdown_caret(true),
+            )
+            .child(all)
+            .child(
+                div()
+                    .px_3()
+                    .py_1()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("Click to select · Shift+click for range"),
+            )
+            .child(v_flex().id("commit-list").max_h(px(400.)).overflow_y_scrollbar().children(commits))
     }
 }

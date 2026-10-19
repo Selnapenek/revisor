@@ -37,7 +37,7 @@ pub fn margin_mark(color: Hsla) -> Div {
     div().absolute().left_0().top_0().bottom_0().w(px(2.)).bg(color)
 }
 
-/// Small uppercase mono label above or beside content ("FILES", "7 / 12 PROOFED").
+/// Small uppercase mono label above or beside content ("FILES", "7 / 12 VIEWED").
 pub fn eyebrow(text: impl Into<SharedString>, cx: &App) -> Div {
     div()
         .font_family(cx.theme().mono_font_family.clone())

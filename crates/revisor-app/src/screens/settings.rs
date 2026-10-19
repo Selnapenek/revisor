@@ -337,7 +337,7 @@ impl Render for SettingsScreen {
                 ),
         ]);
 
-        let experimental = SettingPage::new("expritrimental").resettable(false).group(
+        let experimental = SettingPage::new("Experimental").resettable(false).group(
             SettingGroup::new().title("TypeSafe").item(
                 SettingItem::new(
                     "Enable TypeSafe features",

@@ -348,7 +348,7 @@ impl Render for FilesPanel {
             .py_2()
             .border_b_1()
             .border_color(theme.border)
-            .child(theme::eyebrow(format!("{reviewed} / {total} proofed"), cx))
+            .child(theme::eyebrow(format!("{reviewed} / {total} viewed"), cx))
             .child(
                 Progress::new("review-progress")
                     .with_size(px(2.))

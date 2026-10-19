@@ -1091,6 +1091,7 @@ impl DiffView {
             .items_center()
             .border_b_1()
             .border_color(theme.border)
+            .when(!model.commits.is_empty(), |el| el.child(super::commits::CommitSelector::new(self.model.clone())))
             .child(theme::eyebrow(format!("{} files", model.visible.len()), cx))
             .child(
                 h_flex()
