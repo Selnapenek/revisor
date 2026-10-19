@@ -8,6 +8,7 @@ use revisor_core::provider::types::{
     Commit, IssueComment, PrReview, PullRequest, ReviewComment, ThreadResolutionInfo,
 };
 use revisor_core::provider::github::pr_load_error;
+use revisor_core::ai_review::{self, ReadingStep};
 use revisor_core::{cache::queries, diff::search, files};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -105,6 +106,10 @@ pub struct PrModel {
     pub filter_query: String,
     pub include: String,
     pub exclude: String,
+    /// AI reading order and the head commit it was made for.
+    reading_order: (String, Vec<ReadingStep>),
+    /// Show files in the AI reading order when it is for the PR head.
+    pub ai_order: bool,
     pub search: Option<CodeSearch>,
     /// Positions before search and comment jumps, newest last.
     pub history: Vec<Spot>,
@@ -161,6 +166,8 @@ impl PrModel {
             filter_query: String::new(),
             include: String::new(),
             exclude: String::new(),
+            reading_order: (String::new(), vec![]),
+            ai_order: true,
             search: None,
             history: vec![],
             file_lines: HashMap::new(),
@@ -252,18 +259,58 @@ impl PrModel {
 
     fn set_files(&mut self, files: Vec<ProcessedFile>, cx: &mut Context<Self>) {
         self.files_version += 1;
-        self.selected = files.first().map(|f| f.filename.clone());
         // Recorded rows and load failures belong to the old file set.
         self.history.clear();
         self.diff_errors.clear();
         self.files = files;
         self.refilter(cx);
+        let first = self.visible.first().copied().unwrap_or(0);
+        self.selected = self.files.get(first).map(|f| f.filename.clone());
     }
 
     fn refilter(&mut self, cx: &mut Context<Self>) {
-        self.visible = files::filter_files(&self.files, &self.filter_query, &self.include, &self.exclude);
+        let mut visible = files::filter_files(&self.files, &self.filter_query, &self.include, &self.exclude);
+        if let Some(order) = self.reading_order() {
+            ai_review::sort_by_reading_order(&mut visible, &self.files, order);
+        }
+        self.visible = visible;
         self.research();
         cx.notify();
+    }
+
+    /// The AI reading order for the PR head, when there is one.
+    pub fn has_reading_order(&self) -> bool {
+        let (head, order) = &self.reading_order;
+        !order.is_empty() && self.pr.as_ref().is_some_and(|pr| pr.head_sha == *head)
+    }
+
+    /// The reading order the files are shown in, if any.
+    pub fn reading_order(&self) -> Option<&[ReadingStep]> {
+        (self.ai_order && self.has_reading_order()).then_some(&self.reading_order.1)
+    }
+
+    /// Step number and reason of `path` in the shown reading order.
+    pub fn reading_step(&self, path: &str) -> Option<(usize, &str)> {
+        let (i, step) = self.reading_order()?.iter().enumerate().find(|(_, s)| s.file == path)?;
+        Some((i + 1, &step.reason))
+    }
+
+    pub fn set_reading_order(&mut self, head: String, order: Vec<ReadingStep>, cx: &mut Context<Self>) {
+        self.reading_order = (head, order);
+        self.reorder(cx);
+    }
+
+    pub fn toggle_ai_order(&mut self, cx: &mut Context<Self>) {
+        self.ai_order = !self.ai_order;
+        self.reorder(cx);
+    }
+
+    /// Apply a changed file order and keep the selected file in view.
+    fn reorder(&mut self, cx: &mut Context<Self>) {
+        self.refilter(cx);
+        if let Some(path) = self.selected.clone() {
+            cx.emit(PrEvent::ScrollTo(ScrollTarget::File(path)));
+        }
     }
 
     /// The `i`-th visible file.

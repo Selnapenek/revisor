@@ -71,6 +71,7 @@ impl AiPanel {
             |this: &mut Self, result, _, cx| {
                 if this.review.is_none() {
                     this.review = result.ok().flatten().and_then(|json| serde_json::from_str(&json).ok());
+                    this.share_reading_order(cx);
                     cx.notify();
                 }
             },
@@ -81,9 +82,10 @@ impl AiPanel {
         let subscriptions = vec![
             cx.observe(&model, |_, _, cx| cx.notify()),
             cx.observe(&runs, |_, _, cx| cx.notify()),
-            cx.subscribe(&runs, |this, _, event: &Finished, _| {
+            cx.subscribe(&runs, |this, _, event: &Finished, cx| {
                 if let (true, Ok(review)) = (event.key == this.key, &event.result) {
                     this.review = Some(review.clone());
+                    this.share_reading_order(cx);
                 }
             }),
         ];
@@ -102,6 +104,13 @@ impl AiPanel {
             _agents_load: agents_load,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// The file list and the diff follow the review's reading order.
+    fn share_reading_order(&self, cx: &mut Context<Self>) {
+        let Some(review) = &self.review else { return };
+        let (head, order) = (review.head_sha.clone(), review.reading_order.clone());
+        self.model.update(cx, |m, cx| m.set_reading_order(head, order, cx));
     }
 
     /// Read current defaults when this PR screen returns from Settings.

@@ -39,6 +39,9 @@ wrong implementations and changes the description does not mention. no_spec if t
 - standards_check: use only the supplied base-commit standards files and visible diff. Name the rules relevant to this change \
 in applicable, explain which are satisfied by visible lines in passing, and name rules that need a full checkout, test run, \
 or other evidence in unchecked. If there are no supplied rules, say so. Do not claim a full repository check.\n\
+- reading_order: every file in the diff, in the order a reviewer should read it so each file comes after the files it \
+depends on (for example types and core logic before their callers, a test next to its code). reason is a short phrase on \
+what to look for in that file.\n\
 - comments: only what a careful human reviewer would post. Axis bug: real bugs, broken edge cases, security, data loss, \
 performance traps. Axis spec: a line where the code does not do what the description says. Axis standards: a line that breaks a rule \
 written in the repository standards files below. Keep the primary axis bug for a real bug, even when it also breaks a written rule. \
@@ -67,6 +70,12 @@ pub struct Comment {
     /// The user dismissed it or turned it into a draft. Saved with the review; a new run starts clean.
     #[serde(default)]
     pub dismissed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReadingStep {
+    pub file: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -129,6 +138,9 @@ pub struct Review {
     #[serde(default)]
     pub standards_status: String,
     pub comments: Vec<Comment>,
+    /// Files in the suggested reading order. Empty in reviews saved before it existed.
+    #[serde(default)]
+    pub reading_order: Vec<ReadingStep>,
     /// Commit the review is for; a newer head makes it outdated.
     #[serde(default)]
     pub head_sha: String,
@@ -149,6 +161,12 @@ pub struct Review {
 
 pub const AXES: [(&str, &str); 3] = [("bug", "Bug"), ("spec", "Spec"), ("standards", "Standards")];
 
+/// Sort file `indexes` into the reading order. Files the order does not name keep their diff order, after the others.
+pub fn sort_by_reading_order(indexes: &mut [usize], files: &[ProcessedFile], order: &[ReadingStep]) {
+    // Stable, so unnamed files keep their relative order.
+    indexes.sort_by_key(|&i| order.iter().position(|s| s.file == files[i].filename).unwrap_or(order.len()));
+}
+
 /// Sort key: severity first, then axis.
 pub fn rank(c: &Comment) -> (usize, usize) {
     let severity = ["high", "medium", "low"].iter().position(|s| *s == c.severity).unwrap_or(3);
@@ -157,7 +175,7 @@ pub fn rank(c: &Comment) -> (usize, usize) {
 
 fn schema() -> Value {
     let text = |description: &str| json!({"type":"string","description":description});
-    json!({"type":"object","additionalProperties":false,"required":["summary","evidence","danger","spec","standards_check","comments"],"properties":{
+    json!({"type":"object","additionalProperties":false,"required":["summary","evidence","danger","spec","standards_check","reading_order","comments"],"properties":{
         "summary":text("Markdown"),
         "evidence":text("Markdown"),
         "danger":{"type":"object","additionalProperties":false,"required":["door","blast_radius","note"],"properties":{
@@ -168,6 +186,8 @@ fn schema() -> Value {
             "applicable":text("Relevant written rules and why they apply, or none"),
             "passing":text("Rules supported by visible diff evidence, or none confirmed"),
             "unchecked":text("Rules that need evidence outside the supplied diff, or none")}},
+        "reading_order":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["file","reason"],"properties":{
+            "file":{"type":"string"},"reason":text("Short phrase, under 10 words")}}},
         "comments":{"type":"array","items":{"type":"object","additionalProperties":false,
             "required":["file","line","side","axis","severity","rule","body"],"properties":{
                 "file":{"type":"string"},
@@ -545,6 +565,15 @@ mod tests {
         assert!(in_diff(&files, &comment(2, "old")));
         assert!(!in_diff(&files, &comment(1, "old")));
         assert!(!in_diff(&files, &comment(40, "new")));
+    }
+
+    #[test]
+    fn reading_order_puts_named_files_first_and_keeps_diff_order_for_the_rest() {
+        let files = ["a.rs", "b.rs", "c.rs", "d.rs"].map(|name| file(name, "", "x\n"));
+        let step = |file: &str| ReadingStep { file: file.into(), reason: String::new() };
+        let mut indexes = [0, 1, 2, 3];
+        sort_by_reading_order(&mut indexes, &files, &[step("c.rs"), step("a.rs"), step("gone.rs")]);
+        assert_eq!(indexes, [2, 0, 1, 3]);
     }
 
     #[test]

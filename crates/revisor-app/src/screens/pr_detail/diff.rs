@@ -873,7 +873,16 @@ impl DiffView {
                             .text_color(theme.muted_foreground),
                     )
                     .child(div().w_3().flex_shrink_0().text_xs().font_family(theme.mono_font_family.clone()).font_semibold().text_color(color).child(status))
-                    .child(div().flex_1().truncate().text_sm().font_family(theme.mono_font_family.clone()).child(path.clone())),
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().truncate().text_sm().font_family(theme.mono_font_family.clone()).child(path.clone()))
+                            // The reason wraps, so all of it shows.
+                            .children(model.reading_step(&file.filename).map(|(step, reason)| {
+                                div().text_xs().text_color(theme.muted_foreground).child(format!("{step}. {reason}"))
+                            })),
+                    ),
             )
             .child(
                 h_flex()

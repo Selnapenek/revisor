@@ -146,7 +146,8 @@ impl FilesPanel {
         let m = self.model.read(cx);
         let paths = m.visible.iter().map(|&i| m.files[i].filename.as_str());
         self.rows = if self.tree {
-            visible_rows(&build_file_tree(paths), &self.collapsed_dirs)
+            // ponytail: in reading order a dir can show more than once; its rows collapse together.
+            visible_rows(&build_file_tree(paths, m.reading_order().is_some()), &self.collapsed_dirs)
         } else {
             paths
                 .enumerate()
@@ -175,12 +176,15 @@ impl FilesPanel {
     fn render_rows(&mut self, range: Range<usize>, _: &mut Window, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
         let m = self.model.read(cx);
         let theme = cx.theme();
+        let start = range.start;
         self.rows[range]
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(i, row)| {
                 let path = row.path.clone();
+                // By position: in reading order the same dir can have more than one row.
                 let el = h_flex()
-                    .id(SharedString::from(row.path.clone()))
+                    .id(("file-row", start + i))
                     .group(ROW_GROUP)
                     .relative()
                     .w_full()
@@ -239,6 +243,9 @@ impl FilesPanel {
                                     }),
                             ),
                     )
+                    .children(m.reading_step(&file.filename).map(|(step, _)| {
+                        div().flex_shrink_0().font_family(theme.mono_font_family.clone()).text_color(theme.muted_foreground).child(format!("{step}."))
+                    }))
                     .child(div().w_3().flex_shrink_0().font_family(theme.mono_font_family.clone()).font_semibold().text_color(color).child(letter))
                     .child(
                         h_flex()
@@ -274,6 +281,7 @@ impl Render for FilesPanel {
         let (reviewed, total) = review_progress(&m.files, &m.reviewed);
         let has_globs = !(m.include.is_empty() && m.exclude.is_empty());
         let filtered = has_globs || !m.filter_query.is_empty();
+        let (has_order, ai_order) = (m.has_reading_order(), m.ai_order);
         let theme = cx.theme();
         let glob_field = |label: &'static str, input: &Entity<InputState>| {
             v_flex()
@@ -294,6 +302,20 @@ impl Render for FilesPanel {
                     // Escape leaves the filter; focus goes back to the diff shortcuts.
                     .on_action(|_: &Escape, window, cx| window.blur(cx))
                     .child(Input::new(&self.filter).small().cleanable(true).flex_1())
+                    .when(has_order, |el| {
+                        el.child(
+                            // The label names the order in use, so the state is clear without a pressed look.
+                            Button::new("ai-order")
+                                .xsmall()
+                                .map(|b| if ai_order { b.outline().icon(IconName::Check).label("AI order") } else { b.ghost().label("Diff order") })
+                                .tooltip(if ai_order {
+                                    "Files follow the AI reading order. Click for diff order."
+                                } else {
+                                    "Files follow the diff order. Click for the AI reading order."
+                                })
+                                .on_click(cx.listener(|this, _, _, cx| this.model.update(cx, |m, cx| m.toggle_ai_order(cx)))),
+                        )
+                    })
                     .child(
                         Button::new("file-view")
                             .ghost()

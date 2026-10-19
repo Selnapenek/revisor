@@ -135,8 +135,9 @@ impl TreeNode {
 }
 
 /// Directory tree from file paths. Single-child dir chains collapse into one node
-/// (`client/src`); dirs sort before files, then by name.
-pub fn build_file_tree<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<TreeNode> {
+/// (`client/src`); dirs sort before files, then by name. `keep_order` keeps the input order
+/// instead: a file joins a dir only when the file before it is in that dir too, so a dir can show more than once.
+pub fn build_file_tree<'a>(paths: impl IntoIterator<Item = &'a str>, keep_order: bool) -> Vec<TreeNode> {
     let mut root = Vec::new();
     for (index, path) in paths.into_iter().enumerate() {
         let parts: Vec<&str> = path.split('/').collect();
@@ -146,7 +147,8 @@ pub fn build_file_tree<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<Tree
             let dir_path = parts[..=i].join("/");
             let pos = current
                 .iter()
-                .position(|c| matches!(c, TreeNode::Dir { path, .. } if *path == dir_path))
+                .rposition(|c| matches!(c, TreeNode::Dir { path, .. } if *path == dir_path))
+                .filter(|&pos| !keep_order || pos + 1 == current.len())
                 .unwrap_or_else(|| {
                     current.push(TreeNode::Dir { name: dirs[i].to_string(), path: dir_path, children: Vec::new() });
                     current.len() - 1
@@ -156,15 +158,15 @@ pub fn build_file_tree<'a>(paths: impl IntoIterator<Item = &'a str>) -> Vec<Tree
         }
         current.push(TreeNode::File { name: file_name.to_string(), path: path.to_string(), index });
     }
-    collapse_and_sort(root)
+    collapse_and_sort(root, !keep_order)
 }
 
-fn collapse_and_sort(nodes: Vec<TreeNode>) -> Vec<TreeNode> {
+fn collapse_and_sort(nodes: Vec<TreeNode>, sort: bool) -> Vec<TreeNode> {
     let mut nodes: Vec<TreeNode> = nodes
         .into_iter()
         .map(|node| {
             let TreeNode::Dir { mut name, mut path, children } = node else { return node };
-            let mut children = collapse_and_sort(children);
+            let mut children = collapse_and_sort(children, sort);
             while let [TreeNode::Dir { .. }] = children.as_slice() {
                 let Some(TreeNode::Dir { name: n, path: p, children: c }) = children.pop() else { unreachable!() };
                 name = format!("{name}/{n}");
@@ -174,6 +176,9 @@ fn collapse_and_sort(nodes: Vec<TreeNode>) -> Vec<TreeNode> {
             TreeNode::Dir { name, path, children }
         })
         .collect();
+    if !sort {
+        return nodes;
+    }
     nodes.sort_by(|a, b| match (a, b) {
         (TreeNode::Dir { .. }, TreeNode::File { .. }) => Ordering::Less,
         (TreeNode::File { .. }, TreeNode::Dir { .. }) => Ordering::Greater,
@@ -512,7 +517,7 @@ mod tests {
 
     #[test]
     fn tree_nesting_collapse_and_order() {
-        let tree = build_file_tree(["b.ts", "client/src/x.ts", "client/src/a/y.ts", "A.ts", "lib/z.ts", "lib/q/w.ts"]);
+        let tree = build_file_tree(["b.ts", "client/src/x.ts", "client/src/a/y.ts", "A.ts", "lib/z.ts", "lib/q/w.ts"], false);
         let rows = visible_rows(&tree, &HashSet::new());
         let got: Vec<(usize, &str, &str)> = rows.iter().map(|r| (r.depth, r.name.as_str(), r.path.as_str())).collect();
         assert_eq!(
@@ -535,8 +540,17 @@ mod tests {
     }
 
     #[test]
+    fn tree_in_input_order_groups_only_neighbours() {
+        let tree = build_file_tree(["src/b.ts", "src/a.ts", "x.ts", "src/c.ts"], true);
+        let rows = visible_rows(&tree, &HashSet::new());
+        let got: Vec<(usize, &str)> = rows.iter().map(|r| (r.depth, r.name.as_str())).collect();
+        assert_eq!(got, [(0, "src"), (1, "b.ts"), (1, "a.ts"), (0, "x.ts"), (0, "src"), (1, "c.ts")]);
+        assert_eq!(rows[5].kind, RowKind::File { index: 3 });
+    }
+
+    #[test]
     fn tree_deep_chain_collapses_to_parent_with_files() {
-        let tree = build_file_tree(["a/b/c/d.ts", "a/e.ts"]);
+        let tree = build_file_tree(["a/b/c/d.ts", "a/e.ts"], false);
         let rows = visible_rows(&tree, &HashSet::new());
         let got: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
         assert_eq!(got, ["a", "b/c", "d.ts", "e.ts"]);
@@ -545,7 +559,7 @@ mod tests {
 
     #[test]
     fn visible_rows_hides_collapsed() {
-        let tree = build_file_tree(["src/a.ts", "src/b/c.ts", "x.ts"]);
+        let tree = build_file_tree(["src/a.ts", "src/b/c.ts", "x.ts"], false);
         let collapsed = HashSet::from(["src".to_string()]);
         let rows = visible_rows(&tree, &collapsed);
         assert_eq!(rows.len(), 2);
