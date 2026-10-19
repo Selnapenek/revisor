@@ -402,6 +402,12 @@ pub async fn saved_choice(s: &AppState) -> Result<Choice, String> {
 
 /// Review the latest commit of a PR that is not open on screen, and save the review.
 pub async fn review_pr(s: &AppState, owner: &str, repo: &str, number: u64) -> Result<Review, String> {
+    if crate::demo::is_sample(owner) {
+        let pr = s.provider().await?.get_pull_request(owner, repo, number).await.map_err(|e| e.to_string())?;
+        let review = crate::demo::replay_review(number, pr.head_sha).await;
+        save(s, &review_key(owner, repo, number), &review).await?;
+        return Ok(review);
+    }
     let choice = saved_choice(s).await?;
     let (pr, files, standards) = {
         let p = s.provider().await?;

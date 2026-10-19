@@ -4,6 +4,7 @@ pub mod ai_usage;
 pub mod auth;
 pub mod cache;
 pub mod comments;
+pub mod demo;
 pub mod diff;
 pub mod files;
 pub mod focus;
@@ -36,9 +37,12 @@ pub struct AppState {
 
 impl AppState {
     pub fn open() -> anyhow::Result<Self> {
+        let cache = Cache::open()?;
+        // A sample left open when the app quit.
+        demo::clear(cache.conn())?;
         Ok(Self {
             provider: RwLock::new(None),
-            cache: Mutex::new(Cache::open()?),
+            cache: Mutex::new(cache),
             pending_login: Mutex::new(None),
         })
     }

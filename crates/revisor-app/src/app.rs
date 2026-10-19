@@ -15,6 +15,7 @@ use gpui_kit::component::{
 use gpui_kit::{prelude::*, *};
 use revisor_core::provider::types::{ProviderUser, RateLimitInfo};
 use revisor_core::ai_usage::{self, Usage, WindowUsage};
+use revisor_core::demo::{self, Progress};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 actions!(revisor_nav, [GoBack, OpenSettings, ToggleTips]);
@@ -116,6 +117,7 @@ pub fn set_user(user: Option<ProviderUser>, window: &mut Window, cx: &mut App) {
     root.update(cx, |root, cx| {
         let route = if user.is_some() { Route::Repos } else { Route::Auth };
         root.user = user;
+        root.sample = None;
         root.go(route, window, cx);
         if root.user.is_some() { root.refresh_usage(window, cx); } else { root.usage = None; }
     })
@@ -127,9 +129,34 @@ pub fn current_user(cx: &App) -> Option<ProviderUser> {
     root.read(cx).user.clone()
 }
 
-/// Sign out and return to the auth screen.
+/// Open the bundled sample repository; no GitHub account or AI CLI needed. Restarts a running sample.
+pub fn start_sample(window: &mut Window, cx: &mut App) {
+    let task = backend::call(cx, |s| async move { demo::start(&s).await });
+    window
+        .spawn(cx, async move |cx| {
+            let result = task.await;
+            cx.update(|window, cx| match result {
+                Ok(user) => {
+                    let root = cx.global::<Nav>().0.clone();
+                    root.update(cx, |root, cx| root.enter_sample(user, window, cx)).ok();
+                }
+                Err(e) => window.push_notification(Notification::error(format!("Failed to open the sample: {e}")), cx),
+            })
+            .ok();
+        })
+        .detach();
+}
+
+pub fn in_sample(cx: &App) -> bool {
+    cx.global::<Nav>().0.upgrade().is_some_and(|root| root.read(cx).sample.is_some())
+}
+
+/// Sign out, or leave the sample, and return to the auth screen.
 pub fn sign_out(window: &mut Window, cx: &mut App) {
-    let task = backend::call(cx, |s| async move { revisor_core::auth::logout(&s).await });
+    let sample = in_sample(cx);
+    let task = backend::call(cx, move |s| async move {
+        if sample { demo::stop(&s).await } else { revisor_core::auth::logout(&s).await }
+    });
     window
         .spawn(cx, async move |cx| {
             let result = task.await;
@@ -154,8 +181,30 @@ pub struct AppRoot {
     rate: Option<RateLimitInfo>,
     usage: Option<Vec<Usage>>,
     nav: usize,
+    sample: Option<Sample>,
     _poll: Task<()>,
     _restore: Task<()>,
+}
+
+/// Sample mode and its getting-started checklist.
+struct Sample {
+    opened: bool,
+    progress: Progress,
+    _poll: Task<()>,
+}
+
+impl Sample {
+    /// (done, step, how) for the checklist.
+    fn steps(&self) -> [(bool, &'static str, &'static str); 5] {
+        let p = self.progress;
+        [
+            (self.opened, "Open pull request #42", "Select it in the list and press Enter."),
+            (p.ai, "Run the AI review", "Overview tab, then Run AI review. The sample replays a recorded review."),
+            (p.viewed, "Mark a file viewed", "Tick a file in the Files tab, or use the shortcut in the status bar."),
+            (p.commented, "Comment on a line", "Use Add comment on an AI finding, or click a line in the diff."),
+            (p.submitted, "Submit your review", "Review in the toolbar, then Comment, Approve or Request changes."),
+        ]
+    }
 }
 
 impl AppRoot {
@@ -176,7 +225,7 @@ impl AppRoot {
             let mut ticks = 0u32;
             loop {
                 let fut = this.update(cx, |this, cx| {
-                    this.user.is_some().then(|| {
+                    (this.user.is_some() && this.sample.is_none()).then(|| {
                         backend::call(cx, |s| async move { Ok(s.provider().await?.rate_limit_status()) })
                     })
                 });
@@ -201,7 +250,39 @@ impl AppRoot {
                 ticks = ticks.wrapping_add(1);
             }
         });
-        Self { route: Route::Auth, screen: None, pr_list: None, pr_details: Vec::new(), preloaded_pr: None, pending_preload: None, _preload_delay: Task::ready(()), user: None, rate: None, usage: None, nav: 0, _poll: poll, _restore: restore }
+        Self { route: Route::Auth, screen: None, pr_list: None, pr_details: Vec::new(), preloaded_pr: None, pending_preload: None, _preload_delay: Task::ready(()), user: None, rate: None, usage: None, nav: 0, sample: None, _poll: poll, _restore: restore }
+    }
+
+    fn enter_sample(&mut self, user: ProviderUser, window: &mut Window, cx: &mut Context<Self>) {
+        // Screens of an earlier run show data the restart removed.
+        self.pr_list = None;
+        self.pr_details.clear();
+        self.preloaded_pr = None;
+        self.screen = None;
+        self.user = Some(user);
+        self.rate = None;
+        self.usage = None;
+        // ponytail: polls every 2 s because the steps happen on several screens; send events from them if this ever costs anything.
+        let poll = cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_secs(2)).await;
+            let Ok(fut) = this.update(cx, |_, cx| backend::call(cx, |s| async move { demo::progress(&s).await })) else { return };
+            let Ok(progress) = fut.await else { continue };
+            let updated = this.update(cx, |this, cx| {
+                if let Some(sample) = this.sample.as_mut().filter(|s| s.progress != progress) {
+                    sample.progress = progress;
+                    cx.notify();
+                }
+            });
+            if updated.is_err() {
+                return;
+            }
+        });
+        self.sample = Some(Sample { opened: false, progress: Progress::default(), _poll: poll });
+        self.go(Route::PrList { owner: demo::OWNER.into(), repo: demo::REPO.into() }, window, cx);
+        window.push_notification(
+            Notification::info("This is a sample repository. Follow Getting started in the status bar to try each feature."),
+            cx,
+        );
     }
 
     fn preload_pr(&mut self, route: Route, window: &mut Window, cx: &mut Context<Self>) {
@@ -251,6 +332,9 @@ impl AppRoot {
         self._preload_delay = Task::ready(());
         if let Route::PrDetail { owner, repo, number } = &self.route {
             pr_detail::mark_viewed(owner.to_string(), repo.to_string(), *number, cx);
+        }
+        if let (Some(sample), Route::PrDetail { number: demo::PR, .. }) = (&mut self.sample, &route) {
+            sample.opened = true;
         }
         self.screen = Some(match &route {
             Route::Auth => {
@@ -348,11 +432,12 @@ impl AppRoot {
             .text_color(theme.muted_foreground)
             .bg(theme.status_bar)
             .child("REVISOR")
+            .children(self.sample.as_ref().map(|sample| self.checklist(sample, cx)))
             .children(self.rate.as_ref().map(|r| {
                 div().flex_shrink_0().text_color(rate_color).child(format!("— API {}/{}", thousands(r.remaining), thousands(r.limit)))
             }))
             .children(tips)
-            .when(self.user.is_some(), |el| el.child(self.usage_popover(cx)))
+            .when(self.user.is_some() && self.sample.is_none(), |el| el.child(self.usage_popover(cx)))
             .children(self.user.as_ref().map(|u| {
                 h_flex()
                     .flex_shrink_0()
@@ -361,6 +446,16 @@ impl AppRoot {
                     .child(theme::avatar(&u.login, &u.avatar_url))
                     .child(format!("@{}", u.login))
             }))
+            .when(self.sample.is_some(), |el| {
+                el.child(
+                    Button::new("connect-github")
+                        .primary()
+                        .xsmall()
+                        .label("Connect GitHub")
+                        .tooltip("Leave the sample and sign in to review your own pull requests")
+                        .on_click(|_, window, cx| sign_out(window, cx)),
+                )
+            })
             .child(
                 Button::new("tips")
                     .ghost()
@@ -378,6 +473,74 @@ impl AppRoot {
                     .icon(IconName::Settings)
                     .tooltip_with_action("Settings", &OpenSettings, None)
                     .on_click(|_, window, cx| open_settings(window, cx)),
+            )
+    }
+
+    /// Getting-started steps for the sample; each one ticks when its action is done.
+    fn checklist(&self, sample: &Sample, cx: &Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let steps = sample.steps();
+        let done = steps.iter().filter(|(done, ..)| *done).count();
+        let rows = steps.into_iter().map(|(done, step, how)| {
+            h_flex()
+                .gap_2()
+                .items_start()
+                .py_1()
+                .child(div().pt_0p5().child(if done {
+                    Icon::new(IconName::Check).xsmall().text_color(theme.success).into_any_element()
+                } else {
+                    div().size_3().border_1().border_color(theme.border).into_any_element()
+                }))
+                .child(
+                    // flex_1 + min_w_0: the hint wraps at the popover width instead of overflowing it.
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().text_sm().text_color(if done { theme.muted_foreground } else { theme.foreground }).child(step))
+                        .when(!done, |el| el.child(div().text_xs().text_color(theme.muted_foreground).child(how))),
+                )
+        });
+        let footer = if done == steps.len() {
+            "All done. Connect GitHub to review your own pull requests."
+        } else {
+            "Sample data: nothing is sent to GitHub or an AI service."
+        };
+        h_flex()
+            .flex_shrink_0()
+            .gap_1()
+            .child(div().px_1().text_color(theme.warning).border_1().border_color(theme.warning).child("SAMPLE"))
+            .child(
+                Popover::new("getting-started")
+                    .w(px(320.))
+                    .anchor(Anchor::BottomLeft)
+                    .trigger(Button::new("getting-started-trigger").ghost().xsmall().label(format!("Getting started {done}/{}", steps.len())))
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(div().font_semibold().child("Getting started"))
+                            .children(rows)
+                            .child(div().pt_1().text_xs().text_color(theme.muted_foreground).child(footer))
+                            .child(
+                                h_flex()
+                                    .pt_1()
+                                    .gap_1()
+                                    .child(
+                                        Button::new("sample-connect")
+                                            .small()
+                                            .primary()
+                                            .label("Connect GitHub")
+                                            .on_click(|_, window, cx| sign_out(window, cx)),
+                                    )
+                                    .child(
+                                        Button::new("sample-restart")
+                                            .small()
+                                            .ghost()
+                                            .label("Start over")
+                                            .tooltip("Reset the sample: comments, reviews, viewed files and AI review")
+                                            .on_click(|_, window, cx| start_sample(window, cx)),
+                                    ),
+                            ),
+                    ),
             )
     }
 

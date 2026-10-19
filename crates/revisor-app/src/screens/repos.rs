@@ -327,7 +327,7 @@ impl Render for ReposScreen {
                 Button::new("sign-out")
                     .ghost()
                     .small()
-                    .label("Sign out")
+                    .label(if app::in_sample(cx) { "Leave sample" } else { "Sign out" })
                     .on_click(|_, window, cx| app::sign_out(window, cx)),
             );
         let content = if self.tab == SAVED { self.render_saved(cx) } else { self.render_browse(cx) };

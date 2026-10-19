@@ -1,0 +1,69 @@
+{
+  "summary": "Adds coupon codes to checkout. `findCoupon` looks a code up and drops expired ones, `discountFor` turns it into cents, and `cartTotals` subtracts the discount before tax is added. The money helpers move to `src/lib` and the deprecated `legacy/priceUtils` goes away.\n\n```\ncheckoutSummary(request)\n└─ findCoupon(couponCode)      new, src/coupons.ts\n└─ cartTotals(items, coupon)\n   └─ discountFor(coupon, subtotal)\n   └─ tax = subtotal * TAX_RATE  (rounding removed)\n```",
+  "evidence": "`tests/coupons.test.ts` checks that active coupons are found, expired and unknown codes are ignored, and that a percent coupon takes the right share. `tests/cart.test.ts` checks a 10% coupon on a $25 cart, but its expected total (2450) taxes the full subtotal, so it locks in the tax bug below. No test covers a fixed coupon larger than the cart, lowercase codes, or fractional tax.",
+  "danger": {
+    "door": "two-way",
+    "blast_radius": "checkout",
+    "note": "Wrong totals reach customers until reverted: negative totals with large fixed coupons and fractional-cent tax."
+  },
+  "spec": {
+    "status": "partial",
+    "note": "The description says codes are case-insensitive and tax is charged on the discounted price. The code compares codes exactly and taxes the full subtotal. The `date-fns` dependency is added but not used, and the description does not mention it."
+  },
+  "standards_check": {
+    "applicable": "- CONTRIBUTING.md: Money is always an integer number of cents.\n- CONTRIBUTING.md: Validate and normalize user input at the edge (`src/checkout.ts`).\n- CONTRIBUTING.md: Every new module in `src/` has a test file in `tests/`.\n- CONTRIBUTING.md: No `any` types.",
+    "passing": "`src/coupons.ts` has `tests/coupons.test.ts`. No `any` types in the diff.",
+    "unchecked": "Whether the tests pass and whether other callers of `cartTotals` exist; that needs a checkout and a test run."
+  },
+  "standards_status": "checked",
+  "standards": ["CONTRIBUTING.md"],
+  "reading_order": [
+    { "file": "src/lib/money.ts", "reason": "moved helper and the new percentOf" },
+    { "file": "src/coupons.ts", "reason": "coupon lookup, expiry and discount rules" },
+    { "file": "tests/coupons.test.ts", "reason": "what the coupon rules promise" },
+    { "file": "src/cart.ts", "reason": "where discount and tax combine" },
+    { "file": "tests/cart.test.ts", "reason": "expected totals with a coupon" },
+    { "file": "src/checkout.ts", "reason": "user input reaches the cart here" },
+    { "file": "src/legacy/priceUtils.ts", "reason": "deleted; its rounding is not replaced" },
+    { "file": "package.json", "reason": "new dependency" },
+    { "file": "package-lock.json", "reason": "generated" }
+  ],
+  "comments": [
+    {
+      "file": "src/coupons.ts",
+      "line": 25,
+      "side": "new",
+      "axis": "bug",
+      "severity": "high",
+      "rule": "",
+      "body": "A fixed coupon bigger than the cart makes the total negative: `WELCOME5` on a $3 item gives -$2.00 plus tax. Cap the discount at the subtotal.\n\n```suggestion\n  return Math.min(coupon.amount, subtotal);\n```"
+    },
+    {
+      "file": "src/cart.ts",
+      "line": 23,
+      "side": "new",
+      "axis": "spec",
+      "severity": "high",
+      "rule": "CONTRIBUTING.md: Money is always an integer number of cents.",
+      "body": "The description says tax is charged on the discounted price, but this taxes the full subtotal. It also drops the rounding that `roundPrice` did, so `tax` can be fractional cents (1999 * 0.08 = 159.92).\n\n```suggestion\n  const tax = Math.round((subtotal - discount) * TAX_RATE);\n```"
+    },
+    {
+      "file": "src/checkout.ts",
+      "line": 11,
+      "side": "new",
+      "axis": "spec",
+      "severity": "medium",
+      "rule": "CONTRIBUTING.md: Validate and normalize user input at the edge (`src/checkout.ts`) before it reaches the cart.",
+      "body": "Codes should be case-insensitive, but the raw input goes to `findCoupon`, which compares exactly. `spring10` or ` SPRING10` finds nothing and the discount is silently skipped.\n\n```suggestion\n  const coupon = request.couponCode ? findCoupon(request.couponCode.trim().toUpperCase()) : undefined;\n```"
+    },
+    {
+      "file": "tests/cart.test.ts",
+      "line": 15,
+      "side": "new",
+      "axis": "bug",
+      "severity": "low",
+      "rule": "",
+      "body": "This expectation taxes the pre-discount subtotal (2500 - 250 + 200). With tax on the discounted price it is 2430, so the test will fail once the tax bug is fixed. Update it together with `cart.ts`."
+    }
+  ]
+}

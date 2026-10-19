@@ -291,6 +291,25 @@ impl Render for AuthScreen {
                         .on_click(cx.listener(|this, _, window, cx| this.begin_login(window, cx))),
                 )
                 .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            Button::new("try-sample")
+                                .outline()
+                                .large()
+                                .w_full()
+                                .label("Try a sample pull request")
+                                .on_click(|_, window, cx| app::start_sample(window, cx)),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_center()
+                                .text_color(theme.muted_foreground)
+                                .child("Every feature, no sign-in or AI setup. Nothing leaves this computer."),
+                        ),
+                )
+                .child(
                     Button::new("use-gh")
                         .ghost()
                         .w_full()

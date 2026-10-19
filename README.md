@@ -2,6 +2,10 @@
 
 Fast, offline-capable code review for GitHub repositories.
 
+## Getting started
+
+No account needed: click **Try a sample pull request** on the sign-in screen. See [Getting started](docs/getting-started.md).
+
 ## Roadmap
 
 See the [product roadmap](docs/roadmap.md) for current priorities, progress, release criteria, and the next task.

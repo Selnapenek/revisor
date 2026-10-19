@@ -17,6 +17,7 @@ use revisor_core::agent::{self, Backend, Model};
 use revisor_core::ai_review::{self, Choice, Comment, Review};
 use revisor_core::cache::queries;
 use revisor_core::comments::Side;
+use revisor_core::demo;
 
 /// An installed CLI with its models and the chosen model and effort.
 struct Agent {
@@ -43,6 +44,8 @@ pub struct AiPanel {
     agents: Vec<Agent>,
     /// CLI detection finished; until then assume one is installed.
     agents_loaded: bool,
+    /// Sample PR: runs replay a recorded review, no CLI needed.
+    sample: bool,
     selected: usize,
     review: Option<Review>,
     /// No CLI to run; run failures come from `ai_runs`.
@@ -63,6 +66,7 @@ impl AiPanel {
     pub fn new(model: Entity<PrModel>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let m = model.read(cx);
         let key = ai_review::review_key(&m.owner, &m.repo, m.number);
+        let sample = demo::is_sample(&m.owner);
         let saved_key = key.clone();
         let load = backend::spawn(
             window,
@@ -94,6 +98,7 @@ impl AiPanel {
             key,
             agents: Vec::new(),
             agents_loaded: false,
+            sample,
             selected: 0,
             review: None,
             error: None,
@@ -200,7 +205,7 @@ impl AiPanel {
 
     /// Claude Code or Codex is installed, or detection is still running.
     pub fn available(&self) -> bool {
-        !self.agents_loaded || !self.agents.is_empty()
+        self.sample || !self.agents_loaded || !self.agents.is_empty()
     }
 
     /// Findings of the current review not yet dismissed or drafted, most severe first.
@@ -228,17 +233,27 @@ impl AiPanel {
         }
         let (title, body, head) = (pr.title.clone(), pr.body.clone().unwrap_or_default(), head.to_string());
         let (owner, repo, base) = (m.owner.to_string(), m.repo.to_string(), pr.base_sha.clone());
-        let (files, key) = (m.files.clone(), self.key.clone());
-        let Some(choice) = self.choice() else {
-            self.error = Some("Install Claude Code or Codex and sign in to use AI review.".into());
-            cx.notify();
-            return;
+        let (files, key, number) = (m.files.clone(), self.key.clone(), m.number);
+        // `None` replays the sample review.
+        let choice = match (self.sample, self.choice()) {
+            (true, _) => None,
+            (false, Some(choice)) => Some(choice),
+            (false, None) => {
+                self.error = Some("Install Claude Code or Codex and sign in to use AI review.".into());
+                cx.notify();
+                return;
+            }
         };
         self.error = None;
         ai_runs::runs(cx).update(cx, |runs, cx| {
             runs.start(key.clone(), cx, move |s| async move {
-                let standards = ai_review::standards(&*s.provider().await?, &owner, &repo, &base).await;
-                let review = ai_review::run(choice, head, &title, &body, standards, &files).await?;
+                let review = match choice {
+                    None => demo::replay_review(number, head).await,
+                    Some(choice) => {
+                        let standards = ai_review::standards(&*s.provider().await?, &owner, &repo, &base).await;
+                        ai_review::run(choice, head, &title, &body, standards, &files).await?
+                    }
+                };
                 ai_review::save(&s, &key, &review).await?;
                 Ok(review)
             })
@@ -591,12 +606,15 @@ impl Render for AiPanel {
             .border_b_1()
             .border_color(theme.border)
             .when(self.review.is_none(), |el| {
-                el.child(div().text_color(theme.muted_foreground).child(
+                el.child(div().text_color(theme.muted_foreground).child(if self.sample {
+                    "Sample: replays a recorded Claude Code review, so no AI CLI or account is needed. \
+                     You get a recap and suggested comments; nothing is sent anywhere."
+                } else {
                     "Runs Claude Code or Codex with your account. The PR diff, title and description \
-                     go to Anthropic or OpenAI. You get a recap and suggested comments; nothing is posted.",
-                ))
+                     go to Anthropic or OpenAI. You get a recap and suggested comments; nothing is posted."
+                }))
             })
-            .children(self.choices(cx))
+            .when(!self.sample, |el| el.children(self.choices(cx)))
             .child(h_flex().gap_2().items_center().children(recap).child(
                 Button::new("ai-run")
                     .map(|b| if self.review.is_some() { b.xsmall().ghost() } else { b.small().primary() })
