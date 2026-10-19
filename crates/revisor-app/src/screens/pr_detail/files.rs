@@ -1,6 +1,5 @@
-//! Files tab: review focus, a filterable file list, and a related-file section at the bottom.
+//! Files tab: review focus and a filterable file list.
 
-use super::related;
 use super::state::{CommitSelection, PrEvent, PrModel, ScrollTarget};
 use crate::{backend, theme};
 use gpui_kit::component::{
@@ -48,11 +47,6 @@ pub struct FilesPanel {
     scroll: UniformListScrollHandle,
     /// Selection the list last scrolled to.
     scrolled_to: Option<String>,
-    related_scope: (CommitSelection, bool, u64),
-    related_expanded: bool,
-    related_source: Option<String>,
-    related_results: Vec<(String, Relation)>,
-    related_show_folder: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -77,14 +71,6 @@ impl FilesPanel {
         // `reveal` clears filters in the model; mirror that into the inputs.
         subscriptions.push(cx.observe_in(&model, window, |this, model, window, cx| {
             let m = model.read(cx);
-            let scope = (m.selection, m.files_loading, m.files_version);
-            if this.related_scope != scope {
-                this.related_scope = scope;
-                this.related_expanded = false;
-                this.related_source = None;
-                this.related_results.clear();
-                this.related_show_folder = false;
-            }
             let values = [m.filter_query.clone(), m.include.clone(), m.exclude.clone()];
             for (input, value) in [&this.filter, &this.include, &this.exclude].into_iter().zip(values) {
                 if input.read(cx).value() != value {
@@ -111,10 +97,6 @@ impl FilesPanel {
         )
         .detach();
         let focus = cx.new(|cx| FocusPanel::new(model.clone(), window, cx));
-        let scope = {
-            let m = model.read(cx);
-            (m.selection, m.files_loading, m.files_version)
-        };
         Self {
             model,
             focus,
@@ -127,11 +109,6 @@ impl FilesPanel {
             rows: vec![],
             scroll: UniformListScrollHandle::new(),
             scrolled_to: None,
-            related_scope: scope,
-            related_expanded: false,
-            related_source: None,
-            related_results: Vec::new(),
-            related_show_folder: false,
             _subscriptions: subscriptions,
         }
     }
@@ -151,25 +128,6 @@ impl FilesPanel {
             input.update(cx, |s, cx| s.set_value("", window, cx));
         }
         self.apply_filter(cx);
-    }
-
-    fn toggle_related(&mut self, cx: &mut Context<Self>) {
-        self.related_expanded = !self.related_expanded;
-        if self.related_expanded {
-            let selected = self.model.read(cx).selected.clone();
-            self.set_related_source(selected, cx);
-        }
-        cx.notify();
-    }
-
-    fn set_related_source(&mut self, source: Option<String>, cx: &mut Context<Self>) {
-        let model = self.model.read(cx);
-        self.related_results = source.as_ref().and_then(|path| {
-            model.files.iter().position(|f| &f.filename == path).map(|i| related::results(model, i))
-        }).unwrap_or_default();
-        self.related_source = source;
-        self.related_show_folder = false;
-        cx.notify();
     }
 
     fn toggle_view(&mut self, cx: &mut Context<Self>) {
@@ -265,9 +223,6 @@ impl FilesPanel {
                             .when(!selected, |el| el.invisible().group_hover(ROW_GROUP, |s| s.visible())),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.related_expanded {
-                            this.set_related_source(Some(path.clone()), cx);
-                        }
                         this.model.update(cx, |m, cx| m.select_file(&path, cx));
                     }))
                     .child(
@@ -310,122 +265,6 @@ impl FilesPanel {
                     })
             })
             .collect()
-    }
-
-    fn related_row(&self, target: String, relation: Relation, cx: &Context<Self>) -> impl IntoElement {
-        let (folder, name) = target.rsplit_once('/').unwrap_or(("", &target));
-        let go = target.clone();
-        Button::new(ElementId::Name(format!("related-file:{target}").into()))
-            .ghost()
-            .small()
-            .w_full()
-            .h(px(48.))
-            .accessibility_label(format!("{target}, {}", related::reason(relation)))
-            .tooltip(target.clone())
-            .child(
-                v_flex()
-                    .w_full()
-                    .min_w_0()
-                    .items_start()
-                    .child(div().w_full().truncate().text_sm().font_semibold().child(name.to_string()))
-                    .child(
-                        div()
-                            .w_full()
-                            .truncate()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!("{} · {folder}", related::reason(relation))),
-                    ),
-            )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                // Keep this section's source while the diff follows the selected result.
-                this.model.update(cx, |m, cx| m.reveal(&go, ScrollTarget::File(go.clone()), cx));
-            }))
-    }
-
-    fn related_section(&self, cx: &Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let selected = self.model.read(cx).selected.clone();
-        let source = self.related_source.as_deref().unwrap_or("");
-        let source_name = source.rsplit('/').next().unwrap_or(source);
-        let strong: Vec<_> = self.related_results.iter().filter(|(_, r)| *r != Relation::SameFolder).cloned().collect();
-        let same_folder: Vec<_> = self.related_results.iter().filter(|(_, r)| *r == Relation::SameFolder).cloned().collect();
-        v_flex()
-            .flex_shrink_0()
-            .border_t_1()
-            .border_color(theme.border)
-            .child(
-                Button::new("related-section-toggle")
-                    .ghost()
-                    .small()
-                    .w_full()
-                    .h(px(36.))
-                    .accessibility_label(if self.related_expanded { "Close related files" } else { "Open related files" })
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_2()
-                            .child(Icon::new(if self.related_expanded { IconName::ChevronDown } else { IconName::ChevronRight }).xsmall())
-                            .child("Related"),
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_related(cx))),
-            )
-            .when(self.related_expanded, |el| {
-                el.child(
-                    v_flex()
-                        .h(px(220.))
-                        .min_h_0()
-                        .border_t_1()
-                        .border_color(theme.border)
-                        .child(
-                            h_flex()
-                                .px_3()
-                                .py_1()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .text_xs()
-                                        .text_color(theme.muted_foreground)
-                                        .truncate()
-                                        .child(if source.is_empty() { "Select a file".to_string() } else { format!("From {source_name}") }),
-                                )
-                                .when(selected.as_deref() != Some(source) && selected.is_some(), |bar| {
-                                    bar.child(Button::new("related-use-selected").link().xsmall().label("Use selected")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            let selected = this.model.read(cx).selected.clone();
-                                            this.set_related_source(selected, cx);
-                                        })))
-                                }),
-                        )
-                        .child(
-                            v_flex()
-                                .flex_1()
-                                .min_h_0()
-                                .overflow_y_scrollbar()
-                                .when(!source.is_empty() && strong.is_empty(), |list| {
-                                    list.child(div().px_3().py_2().text_xs().text_color(theme.muted_foreground).child("No related changed files found"))
-                                })
-                                .children(strong.into_iter().map(|(path, relation)| self.related_row(path, relation, cx)))
-                                .when(!same_folder.is_empty() && !self.related_show_folder, |list| {
-                                    list.child(
-                                        Button::new("related-show-folder")
-                                            .link()
-                                            .small()
-                                            .label("Show same-folder files")
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.related_show_folder = true;
-                                                cx.notify();
-                                            })),
-                                    )
-                                })
-                                .when(self.related_show_folder, |list| {
-                                    list.children(same_folder.into_iter().map(|(path, relation)| self.related_row(path, relation, cx)))
-                                }),
-                        ),
-                )
-            })
     }
 }
 
@@ -531,7 +370,6 @@ impl Render for FilesPanel {
             .child(filters)
             .child(progress)
             .child(div().flex_1().min_h_0().child(list))
-            .child(self.related_section(cx))
     }
 }
 

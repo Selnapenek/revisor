@@ -1,3 +1,5 @@
+Superseded: the Related section was removed by 2026-10-18-guided-review-flow.md Task 7. The t key stays.
+
 # Related Files Implementation Plan
 
 > For agentic workers: use the executing-plans skill to implement this plan task by task. Keep work in the current workspace.

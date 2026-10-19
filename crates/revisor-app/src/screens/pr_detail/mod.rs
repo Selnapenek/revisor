@@ -8,7 +8,6 @@ mod conversations;
 mod diff;
 mod files;
 mod markdown_editor;
-mod related;
 mod review;
 mod semantic;
 mod syntax;

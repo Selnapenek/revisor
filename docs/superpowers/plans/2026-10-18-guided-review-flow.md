@@ -257,8 +257,8 @@ Also add `assert!(review.order.is_empty());` to the T3 test `old_review_without_
 **Interfaces:**
 - Keeps: `files::counterpart` (`files.rs:28-35`) and the `t` / `GoToRelatedTest` binding.
 
-- [ ] **Step 1: Delete the section**, its fields, its reset code and `related.rs`. Remove imports that become unused (`Relation`, `related` module). `related_files` stays imported because `counterpart` uses it.
-- [ ] **Step 2: Verify.** Run `cargo check -p revisor-app`. Expected: no errors and no unused warnings. In the app, the Files tab ends at the file list, and `t` on a source file still jumps to its test.
+- [x] **Step 1: Delete the section**, its fields, its reset code and `related.rs`. Remove imports that become unused (`Relation`, `related` module). `related_files` stays imported because `counterpart` uses it.
+- [x] **Step 2: Verify.** Run `cargo check -p revisor-app`. Expected: no errors and no unused warnings. In the app, the Files tab ends at the file list, and `t` on a source file still jumps to its test.
 - [ ] **Step 3: Commit** `refactor(pr-detail): remove the Related section from the Files tab`.
 
 ### Task 8: Tidy-ups
