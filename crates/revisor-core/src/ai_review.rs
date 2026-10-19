@@ -64,6 +64,9 @@ pub struct Comment {
     #[serde(default)]
     pub rule: String,
     pub body: String,
+    /// The user dismissed it or turned it into a draft. Saved with the review; a new run starts clean.
+    #[serde(default)]
+    pub dismissed: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -144,7 +147,13 @@ pub struct Review {
     pub cost_usd: Option<f64>,
 }
 
-pub const AXES: [(&str, &str); 3] = [("bug", "Bugs"), ("spec", "Spec"), ("standards", "Standards")];
+pub const AXES: [(&str, &str); 3] = [("bug", "Bug"), ("spec", "Spec"), ("standards", "Standards")];
+
+/// Sort key: severity first, then axis.
+pub fn rank(c: &Comment) -> (usize, usize) {
+    let severity = ["high", "medium", "low"].iter().position(|s| *s == c.severity).unwrap_or(3);
+    (severity, AXES.iter().position(|(a, _)| *a == c.axis).unwrap_or(3))
+}
 
 fn schema() -> Value {
     let text = |description: &str| json!({"type":"string","description":description});
@@ -394,10 +403,6 @@ pub async fn run(
     let Choice { backend, model, effort } = choice;
     let output = agent::run(backend, model.as_deref(), effort.as_deref(), SYSTEM, &prompt, &schema(), TIMEOUT).await?;
     let mut review: Review = serde_json::from_value(output.value).map_err(|e| format!("Unexpected AI output: {e}"))?;
-    let rank = |c: &Comment| {
-        let axis = AXES.iter().position(|(a, _)| *a == c.axis).unwrap_or(3);
-        (axis, ["high", "medium", "low"].iter().position(|s| *s == c.severity).unwrap_or(3))
-    };
     review.comments.sort_by_key(rank);
     review.standards_status = standards.status().into();
     review.standards = standards.files.into_iter().map(|(path, _)| path).collect();
@@ -534,11 +539,21 @@ mod tests {
     fn comment_must_point_at_a_diff_line() {
         let files = [file("src/a.rs", "keep\nold\n", "keep\nnew\n")];
         let comment = |line, side: &str| Comment { file: "src/a.rs".into(), line, side: side.into(), axis: "bug".into(),
-            severity: "high".into(), rule: String::new(), body: String::new() };
+            severity: "high".into(), rule: String::new(), body: String::new(), dismissed: false };
         assert!(in_diff(&files, &comment(2, "new")));
         assert!(in_diff(&files, &comment(1, "new")));
         assert!(in_diff(&files, &comment(2, "old")));
         assert!(!in_diff(&files, &comment(1, "old")));
         assert!(!in_diff(&files, &comment(40, "new")));
+    }
+
+    #[test]
+    fn findings_sort_by_severity_before_axis() {
+        let comment = |axis: &str, severity: &str| Comment { file: String::new(), line: 1, side: "new".into(), axis: axis.into(),
+            severity: severity.into(), rule: String::new(), body: String::new(), dismissed: false };
+        let mut comments = [comment("bug", "low"), comment("standards", "high"), comment("bug", "high"), comment("spec", "medium")];
+        comments.sort_by_key(rank);
+        let order: Vec<_> = comments.iter().map(|c| (c.severity.as_str(), c.axis.as_str())).collect();
+        assert_eq!(order, [("high", "bug"), ("high", "standards"), ("medium", "spec"), ("low", "bug")]);
     }
 }

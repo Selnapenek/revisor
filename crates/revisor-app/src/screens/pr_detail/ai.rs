@@ -17,7 +17,6 @@ use revisor_core::agent::{self, Backend, Model};
 use revisor_core::ai_review::{self, Choice, Comment, Review};
 use revisor_core::cache::queries;
 use revisor_core::comments::Side;
-use std::collections::HashSet;
 
 /// An installed CLI with its models and the chosen model and effort.
 struct Agent {
@@ -46,8 +45,6 @@ pub struct AiPanel {
     review: Option<Review>,
     /// No CLI to run; run failures come from `ai_runs`.
     error: Option<String>,
-    /// Indexes of comments the user dismissed or turned into a draft.
-    done: HashSet<usize>,
     description_open: bool,
     report_open: bool,
     details_open: bool,
@@ -85,7 +82,6 @@ impl AiPanel {
             cx.subscribe(&runs, |this, _, event: &Finished, _| {
                 if let (true, Ok(review)) = (event.key == this.key, &event.result) {
                     this.review = Some(review.clone());
-                    this.done.clear();
                 }
             }),
         ];
@@ -96,7 +92,6 @@ impl AiPanel {
             selected: 0,
             review: None,
             error: None,
-            done: HashSet::new(),
             description_open: true,
             report_open: true,
             details_open: false,
@@ -223,11 +218,25 @@ impl AiPanel {
     fn draft(&mut self, index: usize, comment: &Comment, cx: &mut Context<Self>) {
         let (path, line, body) = (comment.file.clone(), comment.line, comment.body.clone());
         let side = if comment.side == "old" { Side::Left } else { Side::Right };
-        self.done.insert(index);
+        self.set_dismissed(Some(index), true, cx);
         self.model.update(cx, |m, cx| {
             m.reveal(&path, ScrollTarget::Line { path: path.clone(), side, line }, cx);
             cx.emit(PrEvent::DraftComment { path, side, line, body });
         });
+        cx.notify();
+    }
+
+    /// Mark one finding (`Some`) or all of them, and save the review so it survives a restart.
+    fn set_dismissed(&mut self, index: Option<usize>, dismissed: bool, cx: &mut Context<Self>) {
+        let Some(review) = self.review.as_mut() else { return };
+        for (i, c) in review.comments.iter_mut().enumerate() {
+            if index.is_none_or(|index| index == i) {
+                c.dismissed = dismissed;
+            }
+        }
+        if let Ok(json) = serde_json::to_string(review) {
+            Self::save(self.key.clone(), json, cx);
+        }
         cx.notify();
     }
 
@@ -341,7 +350,14 @@ impl AiPanel {
             .p_3()
             .border_b_1()
             .border_color(theme.border)
-            .child(h_flex().gap_2().min_w_0().child(theme::stamp(comment.severity.clone(), color, theme)).child(link))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .min_w_0()
+                    .child(theme::stamp(comment.severity.clone(), color, theme))
+                    .children(ai_review::AXES.iter().find(|(a, _)| *a == comment.axis).map(|(_, title)| div().text_color(theme.muted_foreground).child(*title)))
+                    .child(link),
+            )
             .when(!comment.rule.is_empty(), |el| el.child(div().text_color(theme.muted_foreground).child(comment.rule.clone())))
             .child(TextView::markdown(("ai-comment", index), comment.body.clone()))
             .child(
@@ -357,12 +373,13 @@ impl AiPanel {
                                 .on_click(cx.listener(move |this, _, _, cx| this.draft(index, &comment, cx))),
                         )
                     })
-                    .child(Button::new(("ai-dismiss", index)).xsmall().ghost().label("Dismiss").on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.done.insert(index);
-                            cx.notify();
-                        },
-                    ))),
+                    .child(
+                        Button::new(("ai-dismiss", index))
+                            .xsmall()
+                            .ghost()
+                            .label("Dismiss")
+                            .on_click(cx.listener(move |this, _, _, cx| this.set_dismissed(Some(index), true, cx))),
+                    ),
             )
     }
 
@@ -426,21 +443,31 @@ impl AiPanel {
             "limited" => ("Limited: rule files skipped", theme.warning),
             _ => ("No rules loaded", muted),
         };
-        let groups = ai_review::AXES.map(|(axis, title)| {
-            let all: Vec<_> = review.comments.iter().enumerate().filter(|(_, c)| c.axis == axis).collect();
-            let open: Vec<_> = all.iter().filter(|(i, _)| !self.done.contains(i)).collect();
-            v_flex()
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .px_3()
-                        .pt_3()
-                        .child(theme::eyebrow(format!("{title} {} / {}", open.len(), all.len()), cx))
-                        .when(axis == "standards", |el| el.child(div().text_color(muted).truncate().child(standards.clone()))),
-                )
-                .when(all.is_empty(), |el| el.child(div().px_3().py_2().text_color(muted).child("None found. The AI can miss problems.")))
-                .children(open.into_iter().map(|(i, c)| self.comment_row(*i, c, cx)))
-        });
+        // Sorted here too: reviews saved before severity-first ordering are still sorted by axis.
+        let mut open: Vec<_> = review.comments.iter().enumerate().filter(|(_, c)| !c.dismissed).collect();
+        open.sort_by_key(|(_, c)| ai_review::rank(c));
+        let (total, dismissed) = (review.comments.len(), review.comments.len() - open.len());
+        let findings = v_flex()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .px_3()
+                    .pt_3()
+                    .child(theme::eyebrow("Findings", cx))
+                    .when(total > 0, |el| el.child(div().text_color(muted).child(format!("{} of {total} left", open.len()))))
+                    .when(dismissed > 0, |el| {
+                        el.child(
+                            Button::new("ai-restore")
+                                .xsmall()
+                                .ghost()
+                                .label(format!("Restore {dismissed}"))
+                                .tooltip("Show dismissed findings again")
+                                .on_click(cx.listener(|this, _, _, cx| this.set_dismissed(None, false, cx))),
+                        )
+                    }),
+            )
+            .when(total == 0, |el| el.child(div().px_3().py_2().text_color(muted).child("None found. The AI can miss problems.")))
+            .children(open.into_iter().map(|(i, c)| self.comment_row(i, c, cx)));
         let details = v_flex()
             .child(Self::section("Evidence", TextView::markdown("ai-evidence", review.evidence.clone()), cx))
             .child(Self::section("Spec", TextView::markdown("ai-spec", review.spec.note.clone()), cx))
@@ -492,7 +519,7 @@ impl AiPanel {
                     )
                     .child(div().child(danger.note.clone())),
             )
-            .children(groups)
+            .child(findings)
             .child(self.fold("ai-details-toggle", "Details", self.details_open, |this| &mut this.details_open, details, cx))
     }
 }
