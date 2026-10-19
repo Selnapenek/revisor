@@ -234,7 +234,10 @@ impl PrModel {
                                 this.selected = Some(path);
                             }
                             // Keep local expansion choices when the PR head did not change.
-                            this.collapsed = collapsed.unwrap_or_else(|| this.reviewed.clone());
+                            this.collapsed = collapsed.unwrap_or_else(|| {
+                                let generated = this.files.iter().map(|f| &f.filename).filter(|p| files::is_generated(p));
+                                this.reviewed.iter().chain(generated).cloned().collect()
+                            });
                         }
                     }
                     Err(e) if this.pr.is_some() => notify_error(format!("Failed to refresh PR: {e}"), cx),

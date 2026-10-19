@@ -88,6 +88,15 @@ fn match_toks(toks: &[Tok], s: &[char]) -> bool {
     }
 }
 
+/// Lock files and generated code, which reviewers rarely read line by line; they open collapsed.
+const GENERATED: &str = "*.lock, *.lockfile, *.lockb, package-lock.json, npm-shrinkwrap.json, pnpm-lock.yaml, go.sum, \
+    *.min.js, *.min.css, *.map, *.pb.go, *_pb2.py, *.g.dart, *.generated.*, **/__generated__/**";
+
+pub fn is_generated(path: &str) -> bool {
+    // ponytail: fixed list, re-parsed per call; read `.gitattributes` linguist-generated if users need custom rules.
+    GlobMatcher::new(GENERATED).is_some_and(|m| m.is_match(path))
+}
+
 /// Sidebar filter: indexes of `files` matching case-insensitive substring `query` and the include / exclude glob fields.
 pub fn filter_files(files: &[ProcessedFile], query: &str, include: &str, exclude: &str) -> Vec<usize> {
     let q = query.to_lowercase();
@@ -462,6 +471,16 @@ mod tests {
         assert!(!m("*.rs,*.toml", "README.md"));
         assert!(m("a+(b).ts", "a+(b).ts"));
         assert!(!m("a.ts", "abts"));
+    }
+
+    #[test]
+    fn generated_files() {
+        for path in ["Cargo.lock", "web/yarn.lock", "package-lock.json", "a/pnpm-lock.yaml", "go.sum", "dist/app.min.js", "api/x.pb.go", "src/__generated__/types.ts", "schema.generated.ts"] {
+            assert!(is_generated(path), "{path}");
+        }
+        for path in ["src/lock.rs", "Cargo.toml", "package.json", "src/generated.rs", "src/map.ts"] {
+            assert!(!is_generated(path), "{path}");
+        }
     }
 
     fn pf(name: &str) -> ProcessedFile {
