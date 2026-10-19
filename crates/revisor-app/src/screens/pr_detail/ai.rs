@@ -41,6 +41,8 @@ pub struct AiPanel {
     /// `ai_review::review_key` of this PR; the run itself lives in `ai_runs`.
     key: String,
     agents: Vec<Agent>,
+    /// CLI detection finished; until then assume one is installed.
+    agents_loaded: bool,
     selected: usize,
     review: Option<Review>,
     /// No CLI to run; run failures come from `ai_runs`.
@@ -89,6 +91,7 @@ impl AiPanel {
             model,
             key,
             agents: Vec::new(),
+            agents_loaded: false,
             selected: 0,
             review: None,
             error: None,
@@ -128,6 +131,7 @@ impl AiPanel {
                 Ok((agents, Backend::parse(&preferred)))
             },
             |this: &mut Self, result, _, cx| {
+                this.agents_loaded = true;
                 if let Ok((agents, preferred)) = result {
                     this.selected = agents.iter().position(|a| Some(a.backend) == preferred).unwrap_or(0);
                     this.agents = agents;
@@ -183,6 +187,28 @@ impl AiPanel {
     /// The saved review is for the commit on screen.
     pub fn is_current(&self, cx: &App) -> bool {
         self.review.as_ref().is_some_and(|r| self.model.read(cx).head_sha() == Some(r.head_sha.as_str()))
+    }
+
+    /// Claude Code or Codex is installed, or detection is still running.
+    pub fn available(&self) -> bool {
+        !self.agents_loaded || !self.agents.is_empty()
+    }
+
+    /// Findings of the current review not yet dismissed or drafted, most severe first.
+    pub fn open_findings(&self, cx: &App) -> Vec<(usize, &Comment)> {
+        let Some(review) = self.review.as_ref().filter(|_| self.is_current(cx)) else { return Vec::new() };
+        let mut open: Vec<_> = review.comments.iter().enumerate().filter(|(_, c)| !c.dismissed).collect();
+        open.sort_by_key(|(_, c)| ai_review::rank(c));
+        open
+    }
+
+    /// Scroll the diff to the most severe open finding, when its line is in the diff.
+    pub fn reveal_top_finding(&mut self, cx: &mut Context<Self>) {
+        let files = &self.model.read(cx).files;
+        let Some((_, c)) = self.open_findings(cx).into_iter().find(|(_, c)| ai_review::in_diff(files, c)) else { return };
+        let (path, line) = (c.file.clone(), c.line);
+        let side = if c.side == "old" { Side::Left } else { Side::Right };
+        self.model.update(cx, |m, cx| m.reveal(&path, ScrollTarget::Line { path: path.clone(), side, line }, cx));
     }
 
     pub fn start(&mut self, cx: &mut Context<Self>) {

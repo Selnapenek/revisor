@@ -133,6 +133,14 @@ pub fn open_shortcuts(window: &mut Window, cx: &mut App) {
 }
 
 #[derive(Clone, Copy, PartialEq)]
+enum Step {
+    Ai,
+    Findings(usize),
+    Unviewed(usize),
+    Finish,
+}
+
+#[derive(Clone, Copy, PartialEq)]
 enum SidebarTab {
     Overview,
     Files,
@@ -304,26 +312,73 @@ impl PrDetailScreen {
                     .on_click(move |_, _, cx| cx.open_url(&url))
             }))
             .children(model.pr.as_ref().map(|_| {
-                let busy = self.ai.read(cx).busy(cx);
-                Button::new("ai-review")
-                    .small()
-                    .ghost()
-                    .label(if busy { "AI reviewing…" } else { "AI review" })
-                    .loading(busy)
-                    .disabled(model.files_loading)
-                    .tooltip("Recap and suggested comments from Claude Code or Codex")
-                    .on_click(cx.listener(|this, _, _, cx| this.ai_review(cx)))
-            }))
-            .children(model.pr.as_ref().map(|_| {
-                let count = model.pending_count();
-                let button = Button::new("review").small().tooltip("Submit a review: comment, approve or request changes");
-                let button = if model.pending_review.is_some() {
-                    button.primary().label(format!("Finish review ({count})"))
-                } else {
-                    button.ghost().label("Review")
+                let pending = model.pending_review.is_some().then(|| model.pending_count());
+                let finish = match pending {
+                    Some(count) => format!("Finish review ({count})"),
+                    None => "Finish review".into(),
                 };
-                button.on_click(cx.listener(|this, _, window, cx| this.open_review(window, cx)))
+                let step = self.next_step(cx);
+                let button = Button::new("next-step").small().primary();
+                let button = match step {
+                    Step::Ai => {
+                        let busy = self.ai.read(cx).busy(cx);
+                        button
+                            .label(if busy { "AI reviewing…" } else { "AI review" })
+                            .loading(busy)
+                            .disabled(model.files_loading)
+                            .tooltip("Recap and suggested comments from Claude Code or Codex")
+                    }
+                    Step::Findings(n) => button.label(format!("Findings left ({n})")).tooltip("Draft or dismiss each AI finding"),
+                    Step::Unviewed(n) => button
+                        .label(format!("Next unviewed file ({n})"))
+                        .tooltip_with_action("Go to the next file not marked viewed", &NextUnreviewed, None),
+                    Step::Finish => button.label(finish.clone()).tooltip("Submit a review: comment, approve or request changes"),
+                };
+                h_flex()
+                    .gap_2()
+                    // Finishing early stays one click away while the main button points at an earlier step.
+                    .when(step != Step::Finish, |el| {
+                        el.child(
+                            Button::new("review")
+                                .small()
+                                .ghost()
+                                .label(if pending.is_some() { finish } else { "Review".into() })
+                                .tooltip("Submit a review: comment, approve or request changes")
+                                .on_click(cx.listener(|this, _, window, cx| this.open_review(window, cx))),
+                        )
+                    })
+                    .child(button.on_click(cx.listener(move |this, _, window, cx| match step {
+                        Step::Ai => this.ai_review(cx),
+                        Step::Findings(_) => this.show_findings(cx),
+                        Step::Unviewed(_) => this.model.update(cx, |m, cx| m.navigate_unreviewed(true, cx)),
+                        Step::Finish => this.open_review(window, cx),
+                    })))
             }))
+    }
+
+    /// The first review step not yet done: run AI, handle its findings, view every file, submit.
+    fn next_step(&self, cx: &App) -> Step {
+        let ai = self.ai.read(cx);
+        if ai.available() && (ai.busy(cx) || !ai.is_current(cx)) {
+            return Step::Ai;
+        }
+        let findings = ai.open_findings(cx).len();
+        if findings > 0 {
+            return Step::Findings(findings);
+        }
+        // Visible files only: the button steps through the filtered list, like `u`.
+        let m = self.model.read(cx);
+        match m.visible.iter().filter(|&&i| !m.reviewed.contains(&m.files[i].filename)).count() {
+            0 => Step::Finish,
+            n => Step::Unviewed(n),
+        }
+    }
+
+    fn show_findings(&mut self, cx: &mut Context<Self>) {
+        self.tab = SidebarTab::Overview;
+        self.sidebar_open = true;
+        self.ai.update(cx, |ai, cx| ai.reveal_top_finding(cx));
+        cx.notify();
     }
 
     /// Show the Overview tab; run a review unless one for this commit exists or is running.
