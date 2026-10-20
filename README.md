@@ -20,6 +20,37 @@ cargo run -p revisor-app
 
 Tests: `cargo test -p revisor-core`.
 
+## Share with macOS users
+
+```sh
+./scripts/package-macos.sh
+```
+
+This makes `target/dist/Revisor-<version>.dmg` for Apple Silicon Macs (macOS 11 or later). Send that file.
+The package uses an ad hoc signature and needs no signing certificate. If you have a Developer ID Application certificate, set `REVISOR_SIGNING_IDENTITY` to its name or SHA-1 hash to use it instead.
+
+The app has no Apple notarization, so macOS can block the first start. Tell users to do these steps one time:
+
+1. Open the DMG and drag **Revisor** to **Applications**.
+2. Open Revisor. macOS shows a warning. Click **Done**.
+3. Open **System Settings > Privacy & Security**. Below **Security**, click **Open Anyway** and enter your password.
+
+## Share with Fedora users
+
+On macOS, install Docker and run:
+
+```sh
+./scripts/package-fedora.sh
+```
+
+This builds an x86_64 RPM in a Fedora 43 container and puts it in `target/dist/`.
+Send `target/dist/revisor-<version>-1.fc43.x86_64.rpm` to Fedora 43 or later users with x86_64 PCs.
+They can install it with `sudo dnf install ./revisor-<version>-1.fc43.x86_64.rpm`, then start **Revisor** from the app menu.
+The app needs a graphical Wayland or X11 session and a working Vulkan driver. To build again, Docker keeps the Rust download and build files under `target/`.
+The RPM has no package signature.
+
 ## GitHub sign-in
 
 Revisor uses GitHub OAuth device flow. See [GitHub OAuth setup](docs/github-oauth.md) to register the OAuth app and set `REVISOR_GITHUB_CLIENT_ID` in `.env`. The client ID is baked in at build time.
+
+To stay signed in without a Revisor Keychain prompt, sign in to [GitHub CLI](https://cli.github.com/manual/gh_auth_login) with `gh auth login`, then select **Use GitHub CLI (stay signed in)** in Revisor. Revisor asks `gh` for its current token when the app starts. OAuth sign-in, pasted tokens, and the optional TypeSafe key last only until Revisor closes. Revisor no longer reads or writes its own Keychain items.

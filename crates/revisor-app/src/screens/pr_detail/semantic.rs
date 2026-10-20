@@ -11,7 +11,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::{prelude::*, *};
 use revisor_core::comments::Side;
-use revisor_core::keyring;
+use revisor_core::session_secrets;
 use revisor_core::semantic::{self, AnchorSide, SemanticResult};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -88,7 +88,7 @@ impl SemanticPanel {
             window,
             cx,
             move |_| async move {
-                let key = keyring::get_focus_key().map_err(backend::err)?.ok_or(NO_KEY)?;
+                let key = session_secrets::get_focus_key().map_err(backend::err)?.ok_or(NO_KEY)?;
                 semantic::search(snapshot, query, key).await
             },
             |this, result, _, _| {

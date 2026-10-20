@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Revisor
+Comment=Review GitHub pull requests
+Exec=revisor
+Terminal=false
+Categories=Development;

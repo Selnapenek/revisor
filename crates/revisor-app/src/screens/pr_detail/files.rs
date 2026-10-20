@@ -14,7 +14,7 @@ use gpui_kit::{prelude::*, *};
 use revisor_core::cache::queries;
 use revisor_core::files::{build_file_tree, related_files, review_progress, visible_rows, Relation, Row, RowKind};
 use revisor_core::focus::{self, FocusResult};
-use revisor_core::keyring;
+use revisor_core::session_secrets;
 use std::collections::HashSet;
 use std::ops::Range;
 
@@ -420,7 +420,7 @@ impl FocusPanel {
         let load = backend::spawn(
             window,
             cx,
-            |_| async move { keyring::get_focus_key().map(|k| k.is_some()).map_err(backend::err) },
+            |_| async move { session_secrets::get_focus_key().map(|k| k.is_some()).map_err(backend::err) },
             |this: &mut Self, result, _, _| match result {
                 Ok(has) => this.has_key = has,
                 Err(_) => this.error = Some("Could not read the TypeSafe key status.".into()),
@@ -480,7 +480,7 @@ impl FocusPanel {
         self.set_key(Some(key), window, cx);
     }
 
-    /// Store `key`, or delete the stored key for `None`.
+    /// Keep `key` for this session, or remove it for `None`.
     fn set_key(&mut self, key: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
         self.saving = true;
         self.error = None;
@@ -490,8 +490,8 @@ impl FocusPanel {
             cx,
             move |_| async move {
                 match key {
-                    Some(key) => keyring::store_focus_key(&key),
-                    None => keyring::delete_focus_key(),
+                    Some(key) => session_secrets::store_focus_key(&key),
+                    None => session_secrets::delete_focus_key(),
                 }
                 .map_err(backend::err)
             },
@@ -531,7 +531,7 @@ impl FocusPanel {
             window,
             cx,
             move |_| async move {
-                let key = keyring::get_focus_key()
+                let key = session_secrets::get_focus_key()
                     .map_err(backend::err)?
                     .ok_or_else(|| "TypeSafe key not found".to_string())?;
                 Ok(focus::analyze(snapshot, key).await)
@@ -649,7 +649,7 @@ impl Render for FocusPanel {
                         Button::new("focus-key-save")
                             .primary()
                             .xsmall()
-                            .label("Save")
+                            .label("Use this session")
                             .loading(self.saving)
                             .disabled(key_empty || self.saving || self.busy)
                             .on_click(cx.listener(|this, _, window, cx| this.save_key(window, cx))),

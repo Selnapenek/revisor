@@ -1,8 +1,9 @@
-use crate::keyring;
+use crate::cache::queries;
 use crate::provider::github::GithubProvider;
 use crate::provider::types::ProviderUser;
 use crate::provider::GitProvider;
 use crate::AppState;
+use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -10,14 +11,60 @@ use std::sync::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const AUTO_GH_SIGN_IN: &str = "auth.auto_gh_sign_in";
+
+fn auto_gh_sign_in_enabled(db: &Connection) -> anyhow::Result<bool> {
+    Ok(queries::get_setting(db, AUTO_GH_SIGN_IN)?.as_deref() == Some("on"))
+}
+
+fn set_auto_gh_sign_in(db: &Connection, enabled: bool) -> anyhow::Result<()> {
+    queries::set_setting(db, AUTO_GH_SIGN_IN, if enabled { "on" } else { "off" })
+}
+
+async fn gh_token() -> Result<String, String> {
+    // Apps started from Finder do not get the shell PATH, so try the usual install paths too.
+    for gh in ["gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"] {
+        let output = match tokio::process::Command::new(gh)
+            .args(["auth", "token", "--hostname", "github.com"])
+            .output()
+            .await
+        {
+            Ok(output) => output,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("Could not run GitHub CLI: {e}")),
+        };
+        if !output.status.success() {
+            return Err(
+                "GitHub CLI is not signed in. Run `gh auth login` in Terminal, then try again."
+                    .into(),
+            );
+        }
+        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned());
+    }
+    Err("GitHub CLI not found. Install it from https://cli.github.com.".into())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::normalize_pat;
+    use super::{auto_gh_sign_in_enabled, normalize_pat, set_auto_gh_sign_in};
+    use rusqlite::Connection;
 
     #[test]
     fn rejects_empty_pat_and_trims_valid_pat() {
         assert!(normalize_pat(" \n ").is_err());
         assert_eq!(normalize_pat("  ghp_example  ").unwrap(), "ghp_example");
+    }
+
+    #[test]
+    fn gh_auto_sign_in_stays_off_after_sign_out() {
+        let mut db = Connection::open_in_memory().unwrap();
+        crate::cache::schema::run_migrations(&mut db).unwrap();
+
+        assert!(!auto_gh_sign_in_enabled(&db).unwrap());
+        set_auto_gh_sign_in(&db, true).unwrap();
+        assert!(auto_gh_sign_in_enabled(&db).unwrap());
+        set_auto_gh_sign_in(&db, false).unwrap();
+        assert!(!auto_gh_sign_in_enabled(&db).unwrap());
     }
 }
 
@@ -39,14 +86,11 @@ pub struct DeviceLoginInfo {
     pub expires_in: u64,
 }
 
-pub async fn validate_and_store_token(
-    state: &AppState,
-    token: String,
-) -> Result<ProviderUser, String> {
+pub async fn sign_in_with_pat(state: &AppState, token: String) -> Result<ProviderUser, String> {
     let token = normalize_pat(&token)?;
     let provider = GithubProvider::new(token.to_owned()).map_err(|e| e.to_string())?;
     let user = provider.validate_token().await.map_err(|e| e.to_string())?;
-    keyring::store_token(token).map_err(|e| e.to_string())?;
+    set_auto_gh_sign_in(state.cache.lock().await.conn(), false).map_err(|e| e.to_string())?;
     let mut guard = state.provider.write().await;
     *guard = Some(Box::new(provider));
     Ok(user)
@@ -54,28 +98,12 @@ pub async fn validate_and_store_token(
 
 /// Signs in with the token of the active GitHub CLI (`gh`) account.
 pub async fn sign_in_with_gh_cli(state: &AppState) -> Result<ProviderUser, String> {
-    // Apps started from Finder do not get the shell PATH, so try the usual install paths too.
-    // ponytail: fixed Homebrew paths; use a login-shell lookup like Jean if gh lives elsewhere
-    for gh in ["gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"] {
-        let output = match tokio::process::Command::new(gh)
-            .args(["auth", "token"])
-            .output()
-            .await
-        {
-            Ok(output) => output,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(format!("Could not run GitHub CLI: {e}")),
-        };
-        if !output.status.success() {
-            return Err(
-                "GitHub CLI is not signed in. Run `gh auth login` in Terminal, then try again."
-                    .into(),
-            );
-        }
-        let token = String::from_utf8_lossy(&output.stdout).into_owned();
-        return validate_and_store_token(state, token).await;
-    }
-    Err("GitHub CLI not found. Install it from https://cli.github.com.".into())
+    let token = gh_token().await?;
+    let provider = GithubProvider::new(token).map_err(|e| e.to_string())?;
+    let user = provider.validate_token().await.map_err(|e| e.to_string())?;
+    set_auto_gh_sign_in(state.cache.lock().await.conn(), true).map_err(|e| e.to_string())?;
+    *state.provider.write().await = Some(Box::new(provider));
+    Ok(user)
 }
 
 pub async fn start_github_login(state: &AppState) -> Result<DeviceLoginInfo, String> {
@@ -157,7 +185,7 @@ pub async fn wait_for_github_login(
     {
         return Err("GitHub sign-in was cancelled.".into());
     }
-    keyring::store_token(&token).map_err(|e| e.to_string())?;
+    set_auto_gh_sign_in(state.cache.lock().await.conn(), false).map_err(|e| e.to_string())?;
     let mut guard = state.provider.write().await;
     *guard = Some(Box::new(provider));
     pending.take();
@@ -184,17 +212,17 @@ pub async fn logout(state: &AppState) -> Result<(), String> {
     if let Some(login) = state.pending_login.lock().await.take() {
         login.cancelled.store(true, Ordering::SeqCst);
     }
-    keyring::delete_token().map_err(|e| e.to_string())?;
+    set_auto_gh_sign_in(state.cache.lock().await.conn(), false).map_err(|e| e.to_string())?;
     let mut guard = state.provider.write().await;
     *guard = None;
     Ok(())
 }
 
 pub async fn restore_session(state: &AppState) -> Result<Option<ProviderUser>, String> {
-    let token = match keyring::get_token().map_err(|e| e.to_string())? {
-        Some(t) => t,
-        None => return Ok(None),
-    };
+    if !auto_gh_sign_in_enabled(state.cache.lock().await.conn()).map_err(|e| e.to_string())? {
+        return Ok(None);
+    }
+    let token = gh_token().await?;
 
     let provider = GithubProvider::new(token).map_err(|e| e.to_string())?;
     match provider.validate_token().await {
@@ -204,8 +232,7 @@ pub async fn restore_session(state: &AppState) -> Result<Option<ProviderUser>, S
             Ok(Some(user))
         }
         Err(e) if e.to_string().contains("401") || e.to_string().contains("Unauthorized") => {
-            // Token is invalid, clean it up
-            let _ = keyring::delete_token();
+            let _ = set_auto_gh_sign_in(state.cache.lock().await.conn(), false);
             Ok(None)
         }
         Err(e) => Err(e.to_string()),

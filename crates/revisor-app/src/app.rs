@@ -240,8 +240,13 @@ impl AppRoot {
                             .ok();
                         }
                         if ticks > 0 && ticks.is_multiple_of(10) {
-                            let usage = ai_usage::installed_usage().await;
-                            this.update(cx, |this, cx| { if this.user.is_some() { this.usage = Some(usage); cx.notify(); } }).ok();
+                            if let Ok(usage) = this.update(cx, |_, cx| {
+                                backend::call(cx, |_| async { Ok(ai_usage::installed_usage().await) })
+                            }) {
+                                if let Ok(usage) = usage.await {
+                                    this.update(cx, |this, cx| { if this.user.is_some() { this.usage = Some(usage); cx.notify(); } }).ok();
+                                }
+                            }
                         }
                     }
                     Ok(None) => {}
@@ -250,7 +255,7 @@ impl AppRoot {
                 ticks = ticks.wrapping_add(1);
             }
         });
-        Self { route: Route::Auth, screen: None, pr_list: None, pr_details: Vec::new(), preloaded_pr: None, pending_preload: None, _preload_delay: Task::ready(()), user: None, rate: None, usage: None, nav: 0, sample: None, _poll: poll, _restore: restore }
+        Self { route: Route::Auth, screen: Some(cx.new(|cx| AuthScreen::new(window, cx)).into()), pr_list: None, pr_details: Vec::new(), preloaded_pr: None, pending_preload: None, _preload_delay: Task::ready(()), user: None, rate: None, usage: None, nav: 0, sample: None, _poll: poll, _restore: restore }
     }
 
     fn enter_sample(&mut self, user: ProviderUser, window: &mut Window, cx: &mut Context<Self>) {
@@ -608,18 +613,25 @@ impl Render for AppRoot {
                 ),
             )
             .child(match &self.screen {
-                Some(screen) => div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .px_2()
-                    .pb_2()
-                    .child(screen.clone())
-                    .with_animation(
-                        ("screen", self.nav),
-                        Animation::new(Duration::from_millis(160)).with_easing(ease_out_quint()),
-                        |el, d| el.opacity(d),
-                    )
-                    .into_any_element(),
+                Some(screen) => {
+                    let content = div()
+                        .flex_1()
+                        .overflow_hidden()
+                        .px_2()
+                        .pb_2()
+                        .child(screen.clone());
+                    if self.nav == 0 {
+                        content.into_any_element()
+                    } else {
+                        content
+                            .with_animation(
+                                ("screen", self.nav),
+                                Animation::new(Duration::from_millis(160)).with_easing(ease_out_quint()),
+                                |el, d| el.opacity(d),
+                            )
+                            .into_any_element()
+                    }
+                }
                 None => div()
                     .flex_1()
                     .flex()

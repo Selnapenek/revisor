@@ -15,7 +15,7 @@ use gpui_kit::{prelude::*, *};
 use revisor_core::comments::CommentThread;
 use revisor_core::provider::types::{IssueComment, PrReview};
 use revisor_core::rank_findings::{self as rf, RankingResult};
-use revisor_core::{keyring, time::relative_time};
+use revisor_core::{session_secrets, time::relative_time};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 pub(super) const NO_KEY: &str = "Save a TypeSafe API key in the Files tab";
@@ -184,7 +184,7 @@ impl ConversationsPanel {
             window,
             cx,
             move |s| async move {
-                let key = keyring::get_focus_key().map_err(backend::err)?.ok_or(NO_KEY)?;
+                let key = session_secrets::get_focus_key().map_err(backend::err)?.ok_or(NO_KEY)?;
                 let fetches: Vec<_> = files
                     .into_iter()
                     .map(|file| {

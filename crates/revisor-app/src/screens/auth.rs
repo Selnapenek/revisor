@@ -119,7 +119,7 @@ impl AuthScreen {
         backend::spawn(
             window,
             cx,
-            |s| async move { auth::validate_and_store_token(&s, token).await },
+            |s| async move { auth::sign_in_with_pat(&s, token).await },
             |this, result, window, cx| {
                 this.pat_submitting = false;
                 match result {
@@ -286,7 +286,7 @@ impl Render for AuthScreen {
                         .primary()
                         .large()
                         .w_full()
-                        .label("Sign in with GitHub")
+                        .label("Sign in with GitHub for this session")
                         .loading(self.starting)
                         .on_click(cx.listener(|this, _, window, cx| this.begin_login(window, cx))),
                 )
@@ -313,7 +313,7 @@ impl Render for AuthScreen {
                     Button::new("use-gh")
                         .ghost()
                         .w_full()
-                        .label("Use GitHub CLI (gh) login")
+                        .label("Use GitHub CLI (stay signed in)")
                         .loading(self.gh_submitting)
                         .on_click(cx.listener(|this, _, window, cx| this.connect_with_gh_cli(window, cx))),
                 )
@@ -321,7 +321,7 @@ impl Render for AuthScreen {
                     Button::new("use-pat")
                         .ghost()
                         .w_full()
-                        .label("Use a personal access token instead")
+                        .label("Use a personal access token for this session")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.show_pat = true;
                             this.error = None;
@@ -333,7 +333,7 @@ impl Render for AuthScreen {
 
         div().size_full().flex().items_center().justify_center().child(
             theme::island(cx)
-                .w(px(384.))
+                .w(px(520.))
                 .h_auto()
                 .p_6()
                 .child(v_flex()

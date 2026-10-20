@@ -8,7 +8,7 @@ pub mod demo;
 pub mod diff;
 pub mod files;
 pub mod focus;
-pub mod keyring;
+pub mod session_secrets;
 pub mod oauth;
 pub mod pr_filters;
 pub mod pr_list_cache;
