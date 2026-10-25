@@ -24,7 +24,7 @@ shlibs_dir=$(mktemp -d)
 mkdir "$shlibs_dir/debian"
 printf 'Source: revisor\n\nPackage: revisor\n' > "$shlibs_dir/debian/control"
 installed_bin="$PWD/$root/usr/bin/revisor"
-linked=$(cd "$shlibs_dir" && dpkg-shlibdeps -O "$installed_bin" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
+linked=$(cd "$shlibs_dir" && dpkg-shlibdeps --ignore-missing-info -O "$installed_bin" | sed -n 's/^shlibs:Depends=//p')
 rm -rf "$shlibs_dir"
 [ -n "$linked" ] || { echo "dpkg-shlibdeps found no libraries." >&2; exit 1; }
 
