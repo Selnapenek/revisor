@@ -5,6 +5,18 @@
 <p align="center"><b>AI code review that lands on the diff.</b><br>
 Native GitHub PR review. Click once: Claude Code or Codex reviews the PR, and each finding shows on its line.</p>
 
+## Download
+
+Get the latest version from [Releases](https://github.com/Selnapenek/revisor/releases/latest):
+
+| System | File |
+|---|---|
+| macOS (Apple Silicon) | `Revisor-<version>.dmg`. See [first start on macOS](#share-with-macos-users) |
+| Fedora 43 or later | `revisor-<version>-1.fc43.x86_64.rpm` |
+| Arch, CachyOS | `revisor-<version>-1-x86_64.pkg.tar.zst` |
+
+Revisor updates itself after that.
+
 ## Getting started
 
 No account needed: click **Try a sample pull request** on the sign-in screen. See [Getting started](docs/getting-started.md).

@@ -1,10 +1,15 @@
-//! App updates from the Revisor releases on Gitea. CI publishes them; see docs/releasing.md.
+//! App updates from the Revisor releases on GitHub. CI publishes them; see docs/releasing.md.
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-const LATEST_RELEASE_URL: &str = "https://gitea.slel.pro/api/v1/repos/slel/revisor/releases/latest";
+const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/Selnapenek/revisor/releases/latest";
+
+/// GitHub rejects API requests without a `User-Agent`.
+fn http() -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder().user_agent(concat!("Revisor/", env!("CARGO_PKG_VERSION"))).build()?)
+}
 
 /// End of the release asset name that updates this build.
 fn asset_suffix() -> Option<&'static str> {
@@ -75,7 +80,9 @@ pub async fn check(current: &str) -> Result<Option<Release>> {
     let Some(suffix) = asset_suffix() else {
         return Ok(None);
     };
-    let release: ApiRelease = reqwest::get(LATEST_RELEASE_URL)
+    let release: ApiRelease = http()?
+        .get(LATEST_RELEASE_URL)
+        .send()
         .await?
         .error_for_status()?
         .json()
@@ -96,10 +103,12 @@ pub async fn check(current: &str) -> Result<Option<Release>> {
 }
 
 /// Download and install `release`. Returns the app to start in place of this one.
-// ponytail: trusts HTTPS from our Gitea; add package signatures (minisign) if the server is ever shared.
+// ponytail: trusts HTTPS from GitHub releases; add package signatures (minisign) if a stolen release token becomes a real risk.
 pub async fn install(release: &Release) -> Result<PathBuf> {
     let app = installed_app()?;
-    let package = reqwest::get(&release.url)
+    let package = http()?
+        .get(&release.url)
+        .send()
         .await?
         .error_for_status()?
         .bytes()
