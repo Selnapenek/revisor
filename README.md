@@ -1,6 +1,9 @@
-# Revisor
+<p align="center"><img src="brand/icon.svg" width="128" alt="Revisor icon"></p>
 
-Fast, offline-capable code review for GitHub repositories.
+<h1 align="center">Revisor</h1>
+
+<p align="center"><b>AI code review that lands on the diff.</b><br>
+Native GitHub PR review. Click once: Claude Code or Codex reviews the PR, and each finding shows on its line.</p>
 
 ## Getting started
 
@@ -69,3 +72,7 @@ Install it on CachyOS with `sudo pacman -U ./target/dist/revisor-<version>-1-x86
 Revisor uses GitHub OAuth device flow. See [GitHub OAuth setup](docs/github-oauth.md) to register the OAuth app and set `REVISOR_GITHUB_CLIENT_ID` in `.env`. The client ID is baked in at build time.
 
 To stay signed in without a Revisor Keychain prompt, sign in to [GitHub CLI](https://cli.github.com/manual/gh_auth_login) with `gh auth login`, then select **Use GitHub CLI (stay signed in)** in Revisor. Revisor asks `gh` for its current token when the app starts. OAuth sign-in, pasted tokens, and the optional TypeSafe key last only until Revisor closes. Revisor no longer reads or writes its own Keychain items.
+
+## License
+
+[FSL-1.1-MIT](LICENSE.md) (Functional Source License). You can use, change, and share Revisor for any purpose except a competing commercial product. Each version becomes MIT two years after its release.

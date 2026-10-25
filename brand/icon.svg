@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Revisor: a review comment that lands on a diff line. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#22232a"/>
+      <stop offset="1" stop-color="#121216"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" fill="none" stroke="#fff" stroke-opacity=".08" stroke-width="3"/>
+  <g stroke-linecap="round" stroke-width="72">
+    <line x1="256" y1="300" x2="256" y2="724" stroke="#bcbec4"/>
+    <line x1="380" y1="300" x2="560" y2="300" stroke="#4a4c55"/>
+    <line x1="380" y1="441" x2="460" y2="441" stroke="#f75464"/>
+    <line x1="380" y1="583" x2="460" y2="583" stroke="#5fb865"/>
+    <line x1="380" y1="724" x2="500" y2="724" stroke="#4a4c55"/>
+  </g>
+  <path d="M600 380h176a64 64 0 0 1 64 64v124a64 64 0 0 1-64 64h-92l-84 72v-72a64 64 0 0 1-64-64v-124a64 64 0 0 1 64-64z" fill="#548af7"/>
+</svg>

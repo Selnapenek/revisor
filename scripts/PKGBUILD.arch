@@ -4,7 +4,7 @@ pkgrel=1
 pkgdesc='Code review app for GitHub repositories'
 arch=('x86_64')
 url='https://gitea.slel.pro/slel/revisor'
-license=('LicenseRef-Not-Declared')
+license=('FSL-1.1-MIT')
 depends=('glibc' 'gcc-libs' 'libxcb' 'libx11' 'libxkbcommon' 'libxkbcommon-x11' 'wayland' 'openssl' 'webkit2gtk-4.1' 'vulkan-icd-loader')
 optdepends=('polkit: install updates from inside Revisor')
 options=('!debug')
@@ -13,4 +13,6 @@ source=()
 package() {
   install -Dm755 "$REVISOR_ROOT/target/arch-x86_64/release/revisor" "$pkgdir/usr/bin/revisor"
   install -Dm644 "$REVISOR_ROOT/scripts/revisor.desktop" "$pkgdir/usr/share/applications/revisor.desktop"
+  install -Dm644 "$REVISOR_ROOT/brand/icon.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/revisor.svg"
+  install -Dm644 "$REVISOR_ROOT/LICENSE.md" "$pkgdir/usr/share/licenses/$pkgname/LICENSE.md"
 }

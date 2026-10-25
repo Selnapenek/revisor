@@ -2,6 +2,7 @@
 name = "revisor-app"
 version = "1.0.0"
 edition = "2021"
+license = "FSL-1.1-MIT"
 
 [[bin]]
 name = "revisor"

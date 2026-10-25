@@ -3,5 +3,6 @@ Type=Application
 Name=Revisor
 Comment=Review GitHub pull requests
 Exec=revisor
+Icon=revisor
 Terminal=false
 Categories=Development;

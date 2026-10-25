@@ -22,6 +22,17 @@ cargo build --release -p revisor-app
 rm -rf "$dist"
 mkdir -p "$app/Contents/MacOS"
 cp target/release/revisor "$app/Contents/MacOS/Revisor"
+
+iconset=target/Revisor.iconset
+rm -rf "$iconset"
+mkdir -p "$iconset" "$app/Contents/Resources"
+for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" brand/icon-1024.png --out "$iconset/icon_${size}x${size}.png" >/dev/null
+    sips -z "$((size * 2))" "$((size * 2))" brand/icon-1024.png --out "$iconset/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$iconset" -o "$app/Contents/Resources/Revisor.icns"
+cp LICENSE.md "$app/Contents/Resources/"
+
 min_os=$(vtool -show-build "$app/Contents/MacOS/Revisor" | awk '/minos/ {print $2; exit}')
 
 cat > "$app/Contents/Info.plist" <<PLIST
@@ -33,6 +44,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>Revisor</string>
   <key>CFBundleIdentifier</key><string>com.revisor.app</string>
   <key>CFBundleExecutable</key><string>Revisor</string>
+  <key>CFBundleIconFile</key><string>Revisor</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleVersion</key><string>$version</string>
