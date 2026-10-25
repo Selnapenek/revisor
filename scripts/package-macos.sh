@@ -63,8 +63,24 @@ fi
 codesign --verify --strict "$app"
 
 ln -s /Applications "$dist/Applications"
+# Same steps as the README: the app has no Apple notarization, so macOS blocks the first start.
+cat > "$dist/If Revisor does not open.txt" <<'TXT'
+Revisor has no Apple notarization, so macOS blocks the first start.
+Do these steps one time:
+
+1. Drag Revisor to Applications.
+2. Open Revisor. macOS shows a warning. Click Done.
+3. Open System Settings > Privacy & Security. Below Security, click
+   Open Anyway. Enter your password.
+
+Or run this command in Terminal:
+
+    xattr -dr com.apple.quarantine /Applications/Revisor.app
+
+Updates from inside Revisor do not show this warning again.
+TXT
 hdiutil create -quiet -volname Revisor -srcfolder "$dist" -ov -format UDZO "target/Revisor-$version.dmg"
-rm "$dist/Applications"
+rm "$dist/Applications" "$dist/If Revisor does not open.txt"
 mv "target/Revisor-$version.dmg" "$dist/"
 # COPYFILE_DISABLE: no AppleDouble ._ files; unpacked, they break the code signature.
 COPYFILE_DISABLE=1 tar -czf "$dist/Revisor-$version-macos-arm64.tar.gz" -C "$dist" Revisor.app

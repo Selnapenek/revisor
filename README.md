@@ -42,6 +42,8 @@ The app has no Apple notarization, so macOS can block the first start. Tell user
 2. Open Revisor. macOS shows a warning. Click **Done**.
 3. Open **System Settings > Privacy & Security**. Below **Security**, click **Open Anyway** and enter your password.
 
+Or run `xattr -dr com.apple.quarantine /Applications/Revisor.app` in Terminal. The DMG has these steps in **If Revisor does not open.txt**. Updates from inside Revisor do not show the warning again.
+
 ## Share with Fedora users
 
 On macOS, install Docker and run:
