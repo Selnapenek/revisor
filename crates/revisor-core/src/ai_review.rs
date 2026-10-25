@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::time::Duration;
 
-/// About 60k tokens. Files past it are listed as skipped.
+/// About 60k tokens of diff, apart from the standards budget. Files past it are listed as skipped.
 // ponytail: whole files in diff order; rank by risk or split into several calls if big PRs need it.
 const MAX_DIFF_CHARS: usize = 240_000;
 const MAX_STANDARDS_CHARS: usize = 160_000;
@@ -317,6 +317,9 @@ pub fn prompt(title: &str, body: &str, standards: &StandardsInput, files: &[Proc
     }
     out.push_str("\n# Diff\n");
     let mut skipped = standards.skipped.clone();
+    let mut not_shown = Vec::new();
+    // Own budget, so large standards files do not push changed files out.
+    let mut diff_chars = 0;
     for file in files {
         let mut text = format!("\n## {} ({})\n", file.filename, file.status);
         let reason = skip_reason(file);
@@ -328,10 +331,23 @@ pub fn prompt(title: &str, body: &str, standards: &StandardsInput, files: &[Proc
                 _ => Ok(()),
             };
         }
+        let reason = reason.or((diff_chars + text.len() > MAX_DIFF_CHARS).then_some("over the size limit"));
         match reason {
-            Some(reason) => skipped.push((file.filename.clone(), reason.to_string())),
-            None if out.len() + text.len() > MAX_DIFF_CHARS => skipped.push((file.filename.clone(), "over the size limit".into())),
-            None => out.push_str(&text),
+            Some(reason) => {
+                skipped.push((file.filename.clone(), reason.to_string()));
+                not_shown.push(file.filename.as_str());
+            }
+            None => {
+                diff_chars += text.len();
+                out.push_str(&text);
+            }
+        }
+    }
+    // Named, so reading_order can still place every changed file.
+    if !not_shown.is_empty() {
+        out.push_str("\n# Changed files without a diff above\n\nPut them in reading_order by path; do not comment on them.\n\n");
+        for name in not_shown {
+            let _ = writeln!(out, "- {name}");
         }
     }
     (out, skipped)
@@ -462,8 +478,21 @@ mod tests {
         assert!(prompt.contains("N1  keep\n"));
         assert!(prompt.contains("O2 -old\n"));
         assert!(prompt.contains("N2 +new\n"));
-        assert!(!prompt.contains("Cargo.lock"));
+        assert!(!prompt.contains("## Cargo.lock"));
+        assert!(prompt.ends_with("- Cargo.lock\n"));
         assert_eq!(skipped, [("Cargo.lock".to_string(), "lock or generated file".to_string())]);
+    }
+
+    #[test]
+    fn standards_do_not_use_the_diff_budget() {
+        let standards = StandardsInput { files: vec![("AGENTS.md".into(), "a".repeat(MAX_STANDARDS_CHARS))], skipped: vec![] };
+        let line = "x".repeat(1_000) + "\n";
+        let files: Vec<_> = (0..300).map(|n| file(&format!("src/f{n}.rs"), "", &line)).collect();
+        let (prompt, skipped) = prompt("Title", "Body", &standards, &files);
+        assert!(prompt.contains("## src/f200.rs (modified)"));
+        // Past the diff budget, a file is still named for reading_order.
+        assert!(!skipped.is_empty() && skipped.len() < 100);
+        assert!(prompt.contains("- src/f299.rs\n"));
     }
 
     #[test]
