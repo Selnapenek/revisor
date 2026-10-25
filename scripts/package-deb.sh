@@ -22,7 +22,7 @@ install -Dm644 LICENSE.md "$root/usr/share/doc/revisor/copyright"
 # Libraries the binary links to, plus the ones GPUI opens at run time.
 shlibs_dir=$(mktemp -d)
 mkdir "$shlibs_dir/debian"
-printf 'Source: revisor\n\nPackage: revisor\n' > "$shlibs_dir/debian/control"
+printf 'Source: revisor\n\nPackage: revisor\nArchitecture: any\n' > "$shlibs_dir/debian/control"
 installed_bin="$PWD/$root/usr/bin/revisor"
 linked=$(cd "$shlibs_dir" && dpkg-shlibdeps --ignore-missing-info -O "$installed_bin" | sed -n 's/^shlibs:Depends=//p')
 rm -rf "$shlibs_dir"
