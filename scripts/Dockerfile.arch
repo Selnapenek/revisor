@@ -1,0 +1,8 @@
+FROM archlinux:latest
+
+COPY scripts/arch-build-deps.sh /tmp/
+# Docker Desktop's x86_64 emulation cannot apply pacman's download seccomp filter.
+RUN sed -i '/^\[options\]/a DisableSandboxSyscalls' /etc/pacman.conf
+RUN sh /tmp/arch-build-deps.sh
+
+WORKDIR /work

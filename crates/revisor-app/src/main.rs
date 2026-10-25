@@ -5,6 +5,7 @@ mod backend;
 mod experimental;
 mod screens;
 mod theme;
+mod update;
 mod video;
 
 use gpui_kit::component::{ThemeRegistry, TitleBar};
@@ -56,6 +57,7 @@ fn main() {
             registry.load_themes_from_str(include_str!("theme.json")).expect("theme.json is valid");
             backend::init(cx);
             ai_runs::init(cx);
+            update::init(cx);
             appearance::init(cx);
             experimental::init(cx);
             screens::pr_detail::init(cx);
@@ -87,6 +89,7 @@ fn main() {
             cx.set_menus([Menu {
                 name: "Revisor".into(),
                 items: vec![
+                    MenuItem::action("Check for Updates…", update::CheckForUpdates),
                     MenuItem::action("Settings…", app::OpenSettings),
                     MenuItem::separator(),
                     MenuItem::action("Quit Revisor", Quit),

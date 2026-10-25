@@ -1,6 +1,6 @@
 //! Root view: routing, session, status bar.
 
-use crate::{appearance, backend, theme};
+use crate::{appearance, backend, theme, update};
 use crate::screens::{
     auth::AuthScreen, pr_detail::{self, state::PrModel, PrDetailScreen}, pr_list::{self, PrListScreen}, repos::ReposScreen, settings::SettingsScreen,
 };
@@ -210,6 +210,7 @@ impl Sample {
 impl AppRoot {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         cx.set_global(Nav(cx.weak_entity()));
+        cx.observe(&update::updater(cx), |_, _, cx| cx.notify()).detach();
         let restore = backend::spawn(
             window,
             cx,
@@ -599,18 +600,20 @@ impl Render for AppRoot {
             .size_full()
             .text_color(theme.foreground)
             .child(
-                TitleBar::new().child(
-                    h_flex()
-                        .gap_2()
-                        .child(div().w(px(2.)).h(px(12.)).bg(theme.primary))
-                        .child(
-                            div()
-                                .font_family(theme.mono_font_family.clone())
-                                .text_base()
-                                .text_color(theme.muted_foreground)
-                                .child("Revisor"),
-                        ),
-                ),
+                TitleBar::new()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(div().w(px(2.)).h(px(12.)).bg(theme.primary))
+                            .child(
+                                div()
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_base()
+                                    .text_color(theme.muted_foreground)
+                                    .child("Revisor"),
+                            ),
+                    )
+                    .children(update::title_bar_button(cx).map(|button| div().pr_2().child(button))),
             )
             .child(match &self.screen {
                 Some(screen) => {

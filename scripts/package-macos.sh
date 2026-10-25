@@ -1,5 +1,6 @@
 #!/bin/sh
-# Builds target/dist/Revisor.app and target/dist/Revisor-<version>.dmg (Apple Silicon).
+# Builds target/dist/Revisor.app, Revisor-<version>.dmg, and the in-app update package
+# Revisor-<version>-macos-arm64.tar.gz (Apple Silicon).
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -53,4 +54,6 @@ ln -s /Applications "$dist/Applications"
 hdiutil create -quiet -volname Revisor -srcfolder "$dist" -ov -format UDZO "target/Revisor-$version.dmg"
 rm "$dist/Applications"
 mv "target/Revisor-$version.dmg" "$dist/"
-echo "Built $dist/Revisor-$version.dmg"
+# COPYFILE_DISABLE: no AppleDouble ._ files; unpacked, they break the code signature.
+COPYFILE_DISABLE=1 tar -czf "$dist/Revisor-$version-macos-arm64.tar.gz" -C "$dist" Revisor.app
+echo "Built $dist/Revisor-$version.dmg and $dist/Revisor-$version-macos-arm64.tar.gz"

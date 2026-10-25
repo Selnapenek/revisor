@@ -20,13 +20,17 @@ cargo run -p revisor-app
 
 Tests: `cargo test -p revisor-core`.
 
+## Release
+
+Push a version tag to build and publish the macOS, Fedora, and Arch packages. Installed apps offer the update. See [Releasing](docs/releasing.md).
+
 ## Share with macOS users
 
 ```sh
 ./scripts/package-macos.sh
 ```
 
-This makes `target/dist/Revisor-<version>.dmg` for Apple Silicon Macs (macOS 11 or later). Send that file.
+This makes `target/dist/Revisor-<version>.dmg` for Apple Silicon Macs (macOS 11 or later), and the in-app update package. Send the DMG.
 The package uses an ad hoc signature and needs no signing certificate. If you have a Developer ID Application certificate, set `REVISOR_SIGNING_IDENTITY` to its name or SHA-1 hash to use it instead.
 
 The app has no Apple notarization, so macOS can block the first start. Tell users to do these steps one time:
@@ -48,6 +52,17 @@ Send `target/dist/revisor-<version>-1.fc43.x86_64.rpm` to Fedora 43 or later use
 They can install it with `sudo dnf install ./revisor-<version>-1.fc43.x86_64.rpm`, then start **Revisor** from the app menu.
 The app needs a graphical Wayland or X11 session and a working Vulkan driver. To build again, Docker keeps the Rust download and build files under `target/`.
 The RPM has no package signature.
+
+## Share with CachyOS users
+
+On macOS, install Docker and run:
+
+```sh
+./scripts/package-arch.sh
+```
+
+This builds an x86_64 Arch package in a container and puts it in `target/dist/`.
+Install it on CachyOS with `sudo pacman -U ./target/dist/revisor-<version>-1-x86_64.pkg.tar.zst`, then start **Revisor** from the app menu. The app needs a graphical Wayland or X11 session and a working Vulkan driver. In-app updates use `pkexec pacman -U`; install `polkit` if it is not on the system. The package has no package signature.
 
 ## GitHub sign-in
 

@@ -17,6 +17,7 @@ pub mod rank_findings;
 pub mod semantic;
 pub mod source_snapshot;
 pub mod time;
+pub mod update;
 
 use cache::Cache;
 use provider::GitProvider;
