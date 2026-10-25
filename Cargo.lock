@@ -4120,6 +4120,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
+name = "minisign-verify"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "871285dc19d8d0ebe0eef3d0e99a205f2a71363b122632cbbfa4a6c370a960ce"
+
+[[package]]
 name = "miniz_oxide"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5791,6 +5797,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "winresource",
 ]
 
 [[package]]
@@ -5803,6 +5810,7 @@ dependencies = [
  "dirs 6.0.0",
  "flate2",
  "futures",
+ "minisign-verify",
  "reqwest",
  "rmp-serde",
  "rusqlite",
@@ -7206,6 +7214,21 @@ dependencies = [
  "toml_parser",
  "toml_writer",
  "winnow 0.7.15",
+]
+
+[[package]]
+name = "toml"
+version = "1.1.0+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8195ca05e4eb728f4ba94f3e3291661320af739c4e43779cbdfae82ab239fcc"
+dependencies = [
+ "indexmap",
+ "serde_core",
+ "serde_spanned 1.1.0",
+ "toml_datetime 1.1.0+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
+ "winnow 1.0.0",
 ]
 
 [[package]]
@@ -9205,6 +9228,16 @@ checksum = "cb5a765337c50e9ec252c2069be9bf91c7df47afb103b642ba3a53bf8101be97"
 dependencies = [
  "cfg-if",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "winresource"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2bc6d36480b829272a5bdabf08e6dca8004761c1da7e35efef800540c66221b"
+dependencies = [
+ "toml 1.1.0+spec-1.1.0",
+ "version_check",
 ]
 
 [[package]]

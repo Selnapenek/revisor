@@ -1,3 +1,5 @@
+// Release builds on Windows open no console window.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 mod ai_runs;
 mod app;
 mod appearance;

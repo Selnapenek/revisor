@@ -37,13 +37,21 @@ impl Backend {
 /// GUI apps do not get the login shell's PATH, so also look where the installers put the CLIs.
 fn executable_path(backend: Backend) -> Option<PathBuf> {
     let name = backend.executable();
-    let home = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/bin"));
+    // Windows: the Claude Code installer makes `claude.exe`; npm makes `codex.cmd`.
+    let names = if cfg!(windows) {
+        vec![format!("{name}.exe"), format!("{name}.cmd")]
+    } else {
+        vec![name.to_string()]
+    };
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(|h| PathBuf::from(h).join(".local/bin"));
     std::env::var_os("PATH")
         .into_iter()
         .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
         .chain(home)
         .chain([PathBuf::from("/opt/homebrew/bin"), PathBuf::from("/usr/local/bin")])
-        .map(|dir| dir.join(name))
+        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
         .find(|path| path.is_file())
 }
 

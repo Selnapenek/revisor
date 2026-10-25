@@ -1,10 +1,12 @@
-# Push a tag like v1.2.3 to build the macOS, Fedora, and Arch packages and publish a GitHub release.
+# Push a tag like v1.2.3 to build all packages, sign them, and publish a GitHub release.
+# Run it by hand (Actions > Release > Run workflow) to build and sign without publishing.
 # The app checks /releases/latest, so the release is created only after all packages are built.
 name: Release
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -17,7 +19,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: |
+      - run: sh scripts/test-release-notes.sh
+      - if: github.event_name == 'push'
+        run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/revisor-app/Cargo.toml)
           [ "v$version" = "$TAG" ] || { echo "Tag $TAG does not match crates/revisor-app version $version." >&2; exit 1; }
 
@@ -36,12 +40,15 @@ jobs:
         with:
           name: macos
           path: |
-            target/dist/Revisor-*.dmg
-            target/dist/Revisor-*-macos-arm64.tar.gz
+            target/dist/Revisor-*-macos-universal.dmg
+            target/dist/Revisor-*-macos-universal.tar.gz
 
   fedora:
     needs: check
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     container: fedora:43
     env:
       CARGO_HOME: /opt/cargo
@@ -54,13 +61,41 @@ jobs:
         run: |
           # GitHub sets HOME=/github/home in containers; rustup refuses a HOME that is not root's.
           HOME=/root sh scripts/fedora-build-deps.sh
-          export PATH="$CARGO_HOME/bin:$PATH" CARGO_TARGET_DIR="$PWD/target/fedora-x86_64"
+          export PATH="$CARGO_HOME/bin:$PATH" CARGO_TARGET_DIR="$PWD/target/fedora-$(uname -m)"
           mkdir -p target/dist
           sh scripts/package-fedora-in-container.sh
       - uses: actions/upload-artifact@v7
         with:
-          name: fedora
-          path: target/dist/revisor-*.x86_64.rpm
+          name: fedora-${{ matrix.runner }}
+          path: target/dist/revisor-*.rpm
+
+  debian:
+    needs: check
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    # The oldest supported glibc: the package runs on Ubuntu 22.04+ and Debian 12+.
+    container: ubuntu:22.04
+    env:
+      CARGO_HOME: /opt/cargo
+      RUSTUP_HOME: /opt/rustup
+    steps:
+      - run: apt-get -qq update && apt-get -qq install -y git
+      - uses: actions/checkout@v7
+      - env:
+          REVISOR_GITHUB_CLIENT_ID: ${{ secrets.REVISOR_GITHUB_CLIENT_ID }}
+        run: |
+          HOME=/root sh scripts/debian-build-deps.sh
+          export PATH="$CARGO_HOME/bin:$PATH"
+          sh scripts/package-deb.sh
+          # Check that apt can resolve every dependency of the package.
+          apt-get -qq update
+          apt-get install -y --dry-run ./target/dist/revisor_*.deb > /dev/null
+      - uses: actions/upload-artifact@v7
+        with:
+          name: debian-${{ matrix.runner }}
+          path: target/dist/revisor_*.deb
 
   arch:
     needs: check
@@ -81,8 +116,28 @@ jobs:
           name: arch
           path: target/dist/revisor-[0-9]*-x86_64.pkg.tar.zst
 
+  windows:
+    needs: check
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+      - env:
+          REVISOR_GITHUB_CLIENT_ID: ${{ secrets.REVISOR_GITHUB_CLIENT_ID }}
+        shell: pwsh
+        run: |
+          rustup update stable --no-self-update
+          cargo build --locked --release -p revisor-app
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $version = (Select-String -Path crates/revisor-app/Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q "/DVersion=$version" scripts\revisor.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: target/dist/Revisor-*-x64-setup.exe
+
   publish:
-    needs: [macos, fedora, arch]
+    needs: [macos, fedora, debian, arch, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -92,9 +147,42 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Checksums and signatures
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
         run: |
-          previous=$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || true)
-          git log --no-merges --format='- %s' "${previous:+$previous..}$TAG" > notes.md
-          gh release create "$TAG" --title "$TAG" --notes-file notes.md dist/*
+          sudo apt-get -qq update && sudo apt-get -qq install -y minisign
+          key="$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          (cd dist && sha256sum * > SHA256SUMS)
+          for file in dist/*; do
+            minisign -S -s "$key" -m "$file" -x "$file.sig" -t "Revisor $TAG $(basename "$file")"
+          done
+          rm "$key"
+          # Verify with the key built into the app; -H accepts only prehashed signatures, as the app does.
+          public_key=$(sed -n 's/^const RELEASE_PUBLIC_KEY: &str = "\(.*\)";/\1/p' crates/revisor-core/src/update.rs)
+          [ -n "$public_key" ] || { echo "RELEASE_PUBLIC_KEY not found in update.rs" >&2; exit 1; }
+          for file in dist/*; do
+            case "$file" in *.sig) continue ;; esac
+            minisign -V -H -q -P "$public_key" -m "$file" -x "$file.sig"
+          done
+          ls -l dist
+      - name: Release notes
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then head="$TAG"; else head=HEAD; fi
+          previous=$(git describe --tags --abbrev=0 "$head^" 2>/dev/null || true)
+          git log --no-merges --format=%s "${previous:+$previous..}$head" | sh scripts/release-notes.sh > notes.md
+          [ -z "$previous" ] || printf '**Full Changelog**: %s/%s/compare/%s...%s\n' \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$previous" "$TAG" >> notes.md
+          cat notes.md
+      - if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$TAG" --title "$TAG" --notes-file notes.md dist/*
+      - if: github.event_name != 'push'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-dry-run
+          path: |
+            dist
+            notes.md

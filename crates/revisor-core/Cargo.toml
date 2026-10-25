@@ -20,3 +20,4 @@ chrono = { version = "0.4", features = ["serde"] }
 flate2 = "1"
 tar = "0.4"
 tempfile = "3"
+minisign-verify = "0.3"

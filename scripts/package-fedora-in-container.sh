@@ -12,9 +12,11 @@ mkdir -p "$topdir/RPMS" "$topdir/BUILD" "$topdir/BUILDROOT"
 rpmbuild -bb scripts/revisor-fedora.spec \
     --define "_topdir $topdir" \
     --define "revisor_version $version" \
-    --define "revisor_root $PWD"
+    --define "revisor_root $PWD" \
+    --define "revisor_bin ${CARGO_TARGET_DIR:-$PWD/target}/release/revisor"
 
-rpm_file=$(find "$topdir/RPMS/x86_64" -maxdepth 1 -name "revisor-$version-*.rpm" -print -quit)
-[ -n "$rpm_file" ] || { echo "RPM build did not produce an x86_64 package." >&2; exit 1; }
+arch=$(uname -m)
+rpm_file=$(find "$topdir/RPMS/$arch" -maxdepth 1 -name "revisor-$version-*.rpm" -print -quit)
+[ -n "$rpm_file" ] || { echo "RPM build did not produce an $arch package." >&2; exit 1; }
 cp "$rpm_file" target/dist/
 echo "Built target/dist/$(basename "$rpm_file")"

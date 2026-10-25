@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 
 const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/Selnapenek/revisor/releases/latest";
 
+/// Public half of the minisign key that signs release packages (secret: `MINISIGN_SECRET_KEY` in GitHub Actions).
+const RELEASE_PUBLIC_KEY: &str = "RWRH6ecO2uiUJbm3paeo2D3jtdAFZfLOxFJeVqSilGnU/woiHLacKkid";
+
 /// GitHub rejects API requests without a `User-Agent`.
 fn http() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder().user_agent(concat!("Revisor/", env!("CARGO_PKG_VERSION"))).build()?)
@@ -13,15 +16,25 @@ fn http() -> Result<reqwest::Client> {
 
 /// End of the release asset name that updates this build.
 fn asset_suffix() -> Option<&'static str> {
-    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        Some("-macos-arm64.tar.gz")
-    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        match linux_package()? {
-            LinuxPackage::Fedora => Some(".x86_64.rpm"),
-            LinuxPackage::Arch => Some("-x86_64.pkg.tar.zst"),
-        }
+    if cfg!(target_os = "macos") {
+        Some("-macos-universal.tar.gz")
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        Some("-x64-setup.exe")
+    } else if cfg!(target_os = "linux") {
+        linux_asset_suffix(linux_package()?, std::env::consts::ARCH)
     } else {
         None
+    }
+}
+
+fn linux_asset_suffix(package: LinuxPackage, arch: &str) -> Option<&'static str> {
+    match (package, arch) {
+        (LinuxPackage::Fedora, "x86_64") => Some(".x86_64.rpm"),
+        (LinuxPackage::Fedora, "aarch64") => Some(".aarch64.rpm"),
+        (LinuxPackage::Arch, "x86_64") => Some("-x86_64.pkg.tar.zst"),
+        (LinuxPackage::Debian, "x86_64") => Some("_amd64.deb"),
+        (LinuxPackage::Debian, "aarch64") => Some("_arm64.deb"),
+        _ => None,
     }
 }
 
@@ -29,6 +42,7 @@ fn asset_suffix() -> Option<&'static str> {
 enum LinuxPackage {
     Fedora,
     Arch,
+    Debian,
 }
 
 fn linux_package() -> Option<LinuxPackage> {
@@ -49,6 +63,10 @@ fn linux_package_from_os_release(contents: &str) -> Option<LinuxPackage> {
         Some(LinuxPackage::Arch)
     } else if id == "fedora" || id_like.split_whitespace().any(|part| part == "fedora") {
         Some(LinuxPackage::Fedora)
+    } else if ["debian", "ubuntu"].contains(&id)
+        || id_like.split_whitespace().any(|part| part == "debian" || part == "ubuntu")
+    {
+        Some(LinuxPackage::Debian)
     } else {
         None
     }
@@ -59,6 +77,7 @@ pub struct Release {
     pub version: String,
     pub notes: String,
     url: String,
+    signature_url: String,
 }
 
 #[derive(Deserialize)]
@@ -91,28 +110,38 @@ pub async fn check(current: &str) -> Result<Option<Release>> {
     if !is_newer(&version, current) {
         return Ok(None);
     }
-    Ok(release
-        .assets
-        .into_iter()
-        .find(|a| a.name.ends_with(suffix))
-        .map(|asset| Release {
-            version,
-            notes: release.body,
-            url: asset.browser_download_url,
-        }))
+    let Some(package) = release.assets.iter().find(|a| a.name.ends_with(suffix)) else {
+        return Ok(None);
+    };
+    // Releases without a signature are not offered.
+    let signature_name = format!("{}.sig", package.name);
+    let Some(signature) = release.assets.iter().find(|a| a.name == signature_name) else {
+        return Ok(None);
+    };
+    Ok(Some(Release {
+        version,
+        notes: release.body,
+        url: package.browser_download_url.clone(),
+        signature_url: signature.browser_download_url.clone(),
+    }))
+}
+
+/// Check `package` against its minisign `signature` and the release key built into the app.
+fn verify(package: &[u8], signature: &str) -> Result<()> {
+    let key = minisign_verify::PublicKey::from_base64(RELEASE_PUBLIC_KEY)?;
+    let signature = minisign_verify::Signature::decode(signature)
+        .context("The update signature cannot be read")?;
+    key.verify(package, &signature, false)
+        .context("The update package has an invalid signature")
 }
 
 /// Download and install `release`. Returns the app to start in place of this one.
-// ponytail: trusts HTTPS from GitHub releases; add package signatures (minisign) if a stolen release token becomes a real risk.
 pub async fn install(release: &Release) -> Result<PathBuf> {
     let app = installed_app()?;
-    let package = http()?
-        .get(&release.url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?;
+    let http = http()?;
+    let package = http.get(&release.url).send().await?.error_for_status()?.bytes().await?;
+    let signature = http.get(&release.signature_url).send().await?.error_for_status()?.text().await?;
+    verify(&package, &signature)?;
     tokio::task::spawn_blocking(move || replace(&app, &package).map(|()| app)).await?
 }
 
@@ -199,6 +228,8 @@ fn replace(_: &Path, package: &[u8]) -> Result<()> {
     let (suffix, command, args): (_, _, &[&str]) = match linux_package() {
         Some(LinuxPackage::Fedora) => (".rpm", "/usr/bin/dnf", &["install", "-y"]),
         Some(LinuxPackage::Arch) => (".pkg.tar.zst", "/usr/bin/pacman", &["-U", "--noconfirm"]),
+        // apt-get treats an argument with a `/` as a local package file.
+        Some(LinuxPackage::Debian) => (".deb", "/usr/bin/apt-get", &["install", "-y"]),
         None => bail!("Updates are not available on this Linux distribution."),
     };
     let file = tempfile::Builder::new().suffix(suffix).tempfile()?;
@@ -216,12 +247,44 @@ fn replace(_: &Path, package: &[u8]) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "windows")]
+fn installed_app() -> Result<PathBuf> {
+    // The installer puts Revisor.exe and its uninstaller in one folder.
+    let exe = std::env::current_exe()?;
+    if !exe.with_file_name("unins000.exe").is_file() {
+        bail!("Updates work only in the installed app.");
+    }
+    Ok(exe)
+}
+
+/// Run the new installer silently over the current install.
+#[cfg(target_os = "windows")]
+fn replace(app: &Path, package: &[u8]) -> Result<()> {
+    let installer = tempfile::Builder::new().prefix("revisor-setup").suffix(".exe").tempfile()?;
+    std::fs::write(installer.path(), package)?;
+    // Close the file so Windows lets it run; the path is deleted on drop.
+    let installer = installer.into_temp_path();
+    // A running exe cannot be overwritten, but it can be renamed.
+    // ponytail: Revisor.exe.old stays until the next update or uninstall; delete it at startup if disk use matters.
+    let old = app.with_extension("exe.old");
+    std::fs::remove_file(&old).ok();
+    std::fs::rename(app, &old)?;
+    let status = std::process::Command::new(&installer)
+        .args(["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"])
+        .status();
+    if !matches!(&status, Ok(status) if status.success()) || !app.is_file() {
+        std::fs::rename(&old, app).ok();
+        bail!("The update installer failed ({status:?})");
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn installed_app() -> Result<PathBuf> {
     bail!("Updates are not available on this platform.")
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn replace(_: &Path, _: &[u8]) -> Result<()> {
     bail!("Updates are not available on this platform.")
 }
@@ -262,8 +325,35 @@ mod tests {
         );
         assert_eq!(
             linux_package_from_os_release("ID=ubuntu\nID_LIKE=debian\n"),
-            None
+            Some(LinuxPackage::Debian)
         );
+        assert_eq!(
+            linux_package_from_os_release("ID=linuxmint\nID_LIKE=\"ubuntu debian\"\n"),
+            Some(LinuxPackage::Debian)
+        );
+        assert_eq!(linux_package_from_os_release("ID=other\n"), None);
+    }
+
+    #[test]
+    fn selects_linux_asset_by_arch() {
+        assert_eq!(linux_asset_suffix(LinuxPackage::Fedora, "aarch64"), Some(".aarch64.rpm"));
+        assert_eq!(linux_asset_suffix(LinuxPackage::Debian, "x86_64"), Some("_amd64.deb"));
+        assert_eq!(linux_asset_suffix(LinuxPackage::Debian, "aarch64"), Some("_arm64.deb"));
+        // No Arch Linux ARM package is built.
+        assert_eq!(linux_asset_suffix(LinuxPackage::Arch, "aarch64"), None);
+    }
+
+    #[test]
+    fn verifies_release_signature() {
+        // Signed with the release key: `minisign -S` over "Revisor update test\n".
+        let signature = "untrusted comment: signature from rsign secret key
+RURH6ecO2uiUJUK14lEkEXOe3zMOoWzV9nCHLwowc0r0+1XwZpzxsg9Ogs5UQ0kRsssWUAUiKHY6lgUtzIdC/p9Pd3s8Rn684AU=
+trusted comment: test fixture
+nYFKTYZI14pgIiyoSTHghQIyCdM/WiAT2f0rVh2vylwlaC9BgFGDk5Dp8KGOs90KeF4Ev7tFjFRK3sK6a22fBg==
+";
+        assert!(verify(b"Revisor update test\n", signature).is_ok());
+        assert!(verify(b"Revisor update test!\n", signature).is_err());
+        assert!(verify(b"Revisor update test\n", "not a signature").is_err());
     }
 
     #[cfg(target_os = "macos")]

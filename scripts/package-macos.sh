@@ -1,6 +1,6 @@
 #!/bin/sh
-# Builds target/dist/Revisor.app, Revisor-<version>.dmg, and the in-app update package
-# Revisor-<version>-macos-arm64.tar.gz (Apple Silicon).
+# Builds target/dist/Revisor.app, Revisor-<version>-macos-universal.dmg, and the in-app update package
+# Revisor-<version>-macos-universal.tar.gz. One universal binary runs on Apple Silicon and Intel Macs.
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -17,11 +17,16 @@ version=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/revisor-app/Cargo.toml)
 dist=target/dist
 app=$dist/Revisor.app
 
-cargo build --release -p revisor-app
+targets="aarch64-apple-darwin x86_64-apple-darwin"
+rustup target add $targets >/dev/null
+for target in $targets; do
+    cargo build --release -p revisor-app --target "$target"
+done
 
 rm -rf "$dist"
 mkdir -p "$app/Contents/MacOS"
-cp target/release/revisor "$app/Contents/MacOS/Revisor"
+lipo -create -output "$app/Contents/MacOS/Revisor" \
+    target/aarch64-apple-darwin/release/revisor target/x86_64-apple-darwin/release/revisor
 
 iconset=target/Revisor.iconset
 rm -rf "$iconset"
@@ -33,7 +38,8 @@ done
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/Revisor.icns"
 cp LICENSE.md "$app/Contents/Resources/"
 
-min_os=$(vtool -show-build "$app/Contents/MacOS/Revisor" | awk '/minos/ {print $2; exit}')
+# The highest minimum macOS version of the two architectures.
+min_os=$(vtool -show-build "$app/Contents/MacOS/Revisor" | awk '/minos/ {print $2}' | sort -V | tail -1)
 
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -79,9 +85,9 @@ Or run this command in Terminal:
 
 Updates from inside Revisor do not show this warning again.
 TXT
-hdiutil create -quiet -volname Revisor -srcfolder "$dist" -ov -format UDZO "target/Revisor-$version.dmg"
+hdiutil create -quiet -volname Revisor -srcfolder "$dist" -ov -format UDZO "target/Revisor-$version-macos-universal.dmg"
 rm "$dist/Applications" "$dist/If Revisor does not open.txt"
-mv "target/Revisor-$version.dmg" "$dist/"
+mv "target/Revisor-$version-macos-universal.dmg" "$dist/"
 # COPYFILE_DISABLE: no AppleDouble ._ files; unpacked, they break the code signature.
-COPYFILE_DISABLE=1 tar -czf "$dist/Revisor-$version-macos-arm64.tar.gz" -C "$dist" Revisor.app
-echo "Built $dist/Revisor-$version.dmg and $dist/Revisor-$version-macos-arm64.tar.gz"
+COPYFILE_DISABLE=1 tar -czf "$dist/Revisor-$version-macos-universal.tar.gz" -C "$dist" Revisor.app
+echo "Built $dist/Revisor-$version-macos-universal.dmg and $dist/Revisor-$version-macos-universal.tar.gz"
