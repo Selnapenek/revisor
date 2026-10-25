@@ -26,6 +26,18 @@ minisign -Vm Revisor-<version>-macos-universal.dmg -x Revisor-<version>-macos-un
 
 Windows shows a SmartScreen warning because the installer has no code signing certificate. Click **More info**, then **Run anyway**.
 
+## In the app
+
+These images use the offline sample pull request. No GitHub account is needed to try it.
+
+**Turn an AI finding into a comment on the code line:**
+
+![A suggested review comment on line 25 of a sample pull request diff](docs/images/line-comment.png)
+
+**Read the AI recap beside the diff:**
+
+![AI review recap beside the changed files in a sample pull request](docs/images/ai-recap.png)
+
 ## Getting started
 
 No account needed: click **Try a sample pull request** on the sign-in screen. See [Getting started](docs/getting-started.md).
