@@ -60,7 +60,7 @@ The README describes an offline-capable app. Verify the actual offline limits be
 | R0-05 | Recruit five developers; observe one review in their usual tool and their first Revisor review | Not started | No external trial users reported |
 | R0-06 | Brand kit: logo, app icon in macOS and Linux packages, tagline, README header, GitHub social preview | In progress | 2026-10-25: files in [`brand/`](../brand/README.md); icon wired into packaging scripts. Installed-app icon check on Fedora and Arch pending |
 | R0-07 | Choose and add a license; update `license=` in `scripts/PKGBUILD.arch` and `scripts/revisor-fedora.spec` | Done | 2026-10-25: [FSL-1.1-MIT](../LICENSE.md) added to the repository, Cargo manifests, and the macOS, Fedora, and Arch packages. All 926 dependencies are permissive or file-level MPL-2.0 |
-| R0-08 | Publish the repository on GitHub with description, topics, social preview, and release downloads | Not started | Repository is on private Gitea now |
+| R0-08 | Publish the repository on GitHub with description, topics, social preview, and release downloads | In progress | 2026-10-25: public at [Selnapenek/revisor](https://github.com/Selnapenek/revisor) with description and topics; releases and in-app updates moved to GitHub Actions and GitHub releases. Social preview upload (web settings only) pending |
 | R0-09 | Record a 30-second demo GIF of the sample PR (open PR, run AI review, add a finding as a comment, submit) for the README and trial invites | Not started | Use the offline sample; no private code in the recording |
 
 ### Acceptance checklist
@@ -215,6 +215,7 @@ These are small-sample validation targets, not proof of market demand. Record th
 | 2026-10-18 | Replace the review-map attempt with one-click AI review | The user found the map added steps without value and asked for one button that gives a recap and suggested comments. The diff goes in the prompt, so no clone, checkout or consent step is needed. Calls use [Claude Code CLI](https://code.claude.com/docs/en/cli-reference) and [Codex CLI](https://learn.chatgpt.com/docs/non-interactive-mode) one-shot mode with a JSON schema and no tools. |
 | 2026-10-18 | Add skill ideas to one-click AI review | Recap uses the [pr skill](https://github.com/mattpocock/skills/blob/main/skills/engineering/pr/SKILL.md) layout (summary, evidence, merge danger). Comments keep the [code-review skill](https://github.com/mattpocock/skills/blob/main/skills/engineering/code-review/SKILL.md) axes apart (bug, spec, standards). Spec is the PR description; standards files are read from the base commit so a PR cannot change its own rules. Fixed-point questions, issue tracker and sub-agents are not used. |
 | 2026-10-25 | License: FSL-1.1-MIT | Keeps the paid offer in R5-04 possible: no competing commercial copies, but people can read, use, and change the code. Each version becomes MIT after two years. See [SPDX FSL-1.1-MIT](https://spdx.org/licenses/FSL-1.1-MIT.html). |
+| 2026-10-25 | Code, releases, and updates on GitHub | One public place for trial users. Hosted runners are free for public repositories, so no own Mac runner is needed. Gitea stays as the `gitea` remote only. |
 
 ## Progress log
 
@@ -222,6 +223,7 @@ These are small-sample validation targets, not proof of market demand. Record th
 |---|---|---|---|
 | 2026-10-17 | Roadmap setup | Read repository documentation and recent history. Keyboard navigation was added in `e8516fa`; no external trial evidence was supplied. Product tasks remain open. | Start R0-01: clean-setup review verification |
 | 2026-10-18 | R3-04 one-click AI review | AI tab and header button added; result is saved per PR and marked outdated when the head commit changes. Jean has no Run environment, so no running-app check yet. | Check on a real PR; then measure how many suggested comments reviewers keep. |
-| 2026-10-25 | R0-06 brand kit | Icon (a review comment on a diff line, Islands theme colors), 1024 PNG, social preview, README header and tagline "AI code review that lands on the diff". Icon added to the macOS bundle and the Fedora and Arch packages. Publish on GitHub (R0-08). |
+| 2026-10-25 | R0-06 brand kit | Icon (a review comment on a diff line, Islands theme colors), 1024 PNG, social preview, README header and tagline "AI code review that lands on the diff". Icon added to the macOS bundle and the Fedora and Arch packages. | Publish on GitHub (R0-08). |
+| 2026-10-25 | R0-08 publish on GitHub | Public repository with topics; release workflow on GitHub Actions; update check reads GitHub releases. First release `v1.0.0` started from the tag. | Upload `brand/social-preview.png` in repository settings; then the clean install check (R0-01) from the GitHub release. |
 
 When work is completed, append a dated row and update its task status, evidence, and Current focus. Do not replace earlier observations.

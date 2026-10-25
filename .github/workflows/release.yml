@@ -52,7 +52,8 @@ jobs:
       - env:
           REVISOR_GITHUB_CLIENT_ID: ${{ secrets.REVISOR_GITHUB_CLIENT_ID }}
         run: |
-          sh scripts/fedora-build-deps.sh
+          # GitHub sets HOME=/github/home in containers; rustup refuses a HOME that is not root's.
+          HOME=/root sh scripts/fedora-build-deps.sh
           export PATH="$CARGO_HOME/bin:$PATH" CARGO_TARGET_DIR="$PWD/target/fedora-x86_64"
           mkdir -p target/dist
           sh scripts/package-fedora-in-container.sh
