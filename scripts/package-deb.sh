@@ -45,4 +45,4 @@ Description: AI code review that lands on the diff
 CONTROL
 
 mkdir -p target/dist
-dpkg-deb --build --root-owner-group "$root" "target/dist/revisor_${version}_${arch}.deb"
+dpkg-deb --build -Zxz --root-owner-group "$root" "target/dist/revisor_${version}_${arch}.deb"

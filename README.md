@@ -11,11 +11,20 @@ Get the latest version from [Releases](https://github.com/Selnapenek/revisor/rel
 
 | System | File |
 |---|---|
-| macOS (Apple Silicon) | `Revisor-<version>.dmg`. See [first start on macOS](#share-with-macos-users) |
-| Fedora 43 or later | `revisor-<version>-1.fc43.x86_64.rpm` |
-| Arch, CachyOS | `revisor-<version>-1-x86_64.pkg.tar.zst` |
+| macOS 11 or later (Apple Silicon and Intel) | `Revisor-<version>-macos-universal.dmg`. See [first start on macOS](#share-with-macos-users) |
+| Windows 10 or later (x64) | `Revisor-<version>-x64-setup.exe` |
+| Ubuntu 22.04+, Debian 12+ | `revisor_<version>_amd64.deb` or `revisor_<version>_arm64.deb`: `sudo apt install ./revisor_<version>_amd64.deb` |
+| Fedora 43 or later | `revisor-<version>-1.fc43.x86_64.rpm` or `.aarch64.rpm` |
+| Arch, CachyOS (x86_64) | `revisor-<version>-1-x86_64.pkg.tar.zst` |
 
-Revisor updates itself after that.
+Revisor updates itself after that. Each file has a [minisign](https://jedisct1.github.io/minisign/) signature (`.sig`), and `SHA256SUMS` lists the checksums. To check a download by hand:
+
+```sh
+minisign -Vm Revisor-<version>-macos-universal.dmg -x Revisor-<version>-macos-universal.dmg.sig \
+    -P RWRH6ecO2uiUJbm3paeo2D3jtdAFZfLOxFJeVqSilGnU/woiHLacKkid
+```
+
+Windows shows a SmartScreen warning because the installer has no code signing certificate. Click **More info**, then **Run anyway**.
 
 ## Getting started
 
@@ -45,7 +54,7 @@ Push a version tag to build and publish the macOS, Fedora, and Arch packages. In
 ./scripts/package-macos.sh
 ```
 
-This makes `target/dist/Revisor-<version>.dmg` for Apple Silicon Macs (macOS 11 or later), and the in-app update package. Send the DMG.
+This makes `target/dist/Revisor-<version>-macos-universal.dmg` for Apple Silicon and Intel Macs (macOS 11 or later), and the in-app update package. Send the DMG.
 The package uses an ad hoc signature and needs no signing certificate. If you have a Developer ID Application certificate, set `REVISOR_SIGNING_IDENTITY` to its name or SHA-1 hash to use it instead.
 
 The app has no Apple notarization, so macOS can block the first start. Tell users to do these steps one time:
