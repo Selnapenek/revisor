@@ -5,6 +5,34 @@
 <p align="center"><b>AI code review that lands on the diff.</b><br>
 Native GitHub PR review. Click once: Claude Code or Codex reviews the PR, and each finding shows on its line.</p>
 
+## Why Revisor
+
+AI can review a pull request in seconds. The slow part comes after that: the review is in a terminal or a chat, and the code is on GitHub. You find each line again and type each comment again. Review bots remove that work, but they put each comment directly on the PR, and the team learns to ignore them.
+
+Revisor puts the AI review, the diff, and your GitHub review in one window. You decide what the author sees.
+
+| The pain | With Revisor |
+|---|---|
+| You copy AI findings from a terminal to GitHub by hand | Each finding is on its code line. Click **Add comment** to make it a draft comment, or **Dismiss** to drop it. |
+| A bot floods the PR with comments that nobody approved | Nothing goes to GitHub until you post it. You can edit each comment first. |
+| You open a large PR and do not know where to start | Read the recap first: summary, evidence, and merge danger. Then at most 10 comments, the most severe first. |
+| Each AI review tool wants a new account, API key, and bill | Revisor runs the Claude Code or Codex CLI that you already have. No Revisor account. |
+| The GitHub page is slow on large diffs, and you lose your place | A native app with keyboard navigation. Large diffs load on demand, and viewed files stay marked. |
+
+**Try it in one minute.** The app has an offline sample pull request with a recorded AI review. You need no GitHub account and no AI CLI.
+
+## In the app
+
+These images use the offline sample pull request. No GitHub account is needed to try it.
+
+**Turn an AI finding into a comment on the code line:**
+
+![A suggested review comment on line 25 of a sample pull request diff](docs/images/line-comment.png)
+
+**Read the AI recap beside the diff:**
+
+![AI review recap beside the changed files in a sample pull request](docs/images/ai-recap.png)
+
 ## Download
 
 Get the latest version from [Releases](https://github.com/Selnapenek/revisor/releases/latest):
@@ -25,18 +53,6 @@ minisign -Vm Revisor-<version>-macos-universal.dmg -x Revisor-<version>-macos-un
 ```
 
 Windows shows a SmartScreen warning because the installer has no code signing certificate. Click **More info**, then **Run anyway**.
-
-## In the app
-
-These images use the offline sample pull request. No GitHub account is needed to try it.
-
-**Turn an AI finding into a comment on the code line:**
-
-![A suggested review comment on line 25 of a sample pull request diff](docs/images/line-comment.png)
-
-**Read the AI recap beside the diff:**
-
-![AI review recap beside the changed files in a sample pull request](docs/images/ai-recap.png)
 
 ## Getting started
 
