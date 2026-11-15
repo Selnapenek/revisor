@@ -365,9 +365,9 @@ impl PrDetailScreen {
         if findings > 0 {
             return Step::Findings(findings);
         }
-        // Visible files only: the button steps through the filtered list, like `u`.
+        // Listed files only: the button steps through the filtered list, like `u`.
         let m = self.model.read(cx);
-        match m.visible.iter().filter(|&&i| !m.reviewed.contains(&m.files[i].filename)).count() {
+        match m.listed.iter().filter(|&&i| !m.reviewed.contains(&m.files[i].filename)).count() {
             0 => Step::Finish,
             n => Step::Unviewed(n),
         }

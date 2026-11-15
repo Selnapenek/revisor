@@ -1,6 +1,6 @@
 //! Overview tab: the PR description, then a one-click review by the installed Claude Code or Codex CLI.
-//! The review shows a recap of the change and suggested comments; each one opens a prefilled comment form
-//! on its line. Nothing is posted by itself.
+//! The review shows a recap of the change, suggested comments and logical groups of the changed files.
+//! Each comment opens a prefilled comment form on its line. Nothing is posted by itself.
 
 use super::state::{PrEvent, PrModel, ScrollTarget};
 use crate::ai_runs::{self, Finished};
@@ -111,11 +111,11 @@ impl AiPanel {
         }
     }
 
-    /// The file list and the diff follow the review's reading order.
+    /// The file list and the diff follow the review's groups and reading order.
     fn share_reading_order(&self, cx: &mut Context<Self>) {
         let Some(review) = &self.review else { return };
-        let (head, order) = (review.head_sha.clone(), review.reading_order.clone());
-        self.model.update(cx, |m, cx| m.set_reading_order(head, order, cx));
+        let (head, order, groups) = (review.head_sha.clone(), review.reading_order.clone(), review.groups.clone());
+        self.model.update(cx, |m, cx| m.set_review_map(head, order, groups, cx));
     }
 
     /// Read current defaults when this PR screen returns from Settings.
@@ -518,6 +518,23 @@ impl AiPanel {
             )
             .when(total == 0, |el| el.child(div().px_3().py_2().text_color(muted).child("None found. The AI can miss problems.")))
             .children(open.into_iter().map(|(i, c)| self.comment_row(i, c, cx)));
+        // Links only while the Files tab shows these groups: the review is current and the AI order is on.
+        let groups_shown = self.is_current(cx) && !self.model.read(cx).groups().is_empty();
+        let groups = v_flex().gap_2().children(review.groups.iter().enumerate().map(|(i, group)| {
+            let title = format!("{}. {}", i + 1, group.title);
+            let title = if groups_shown {
+                Button::new(("ai-group", i))
+                    .link()
+                    .xsmall()
+                    .label(title)
+                    .tooltip("Show only this group in the diff")
+                    .on_click(cx.listener(move |this, _, _, cx| this.model.update(cx, |m, cx| m.show_group(i, cx))))
+                    .into_any_element()
+            } else {
+                div().font_semibold().child(title).into_any_element()
+            };
+            v_flex().gap_0p5().items_start().child(title).child(div().text_color(muted).child(group.summary.clone()))
+        }));
         let details = v_flex()
             .child(Self::section("Evidence", TextView::markdown("ai-evidence", review.evidence.clone()), cx))
             .child(Self::section("Spec", TextView::markdown("ai-spec", review.spec.note.clone()), cx))
@@ -570,6 +587,7 @@ impl AiPanel {
                     .child(div().child(danger.note.clone())),
             )
             .child(findings)
+            .when(!review.groups.is_empty(), |el| el.child(Self::section("Groups", groups, cx)))
             .child(self.fold("ai-details-toggle", "Details", self.details_open, |this| &mut this.details_open, details, cx))
     }
 }

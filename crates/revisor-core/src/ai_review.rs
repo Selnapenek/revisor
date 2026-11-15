@@ -42,6 +42,10 @@ or other evidence in unchecked. If there are no supplied rules, say so. Do not c
 - reading_order: every file in the diff, in the order a reviewer should read it so each file comes after the files it \
 depends on (for example types and core logic before their callers, a test next to its code). reason is a short phrase on \
 what to look for in that file.\n\
+- groups: put the changed files into logical groups. One group is one behavior or purpose that a reviewer can check on its own \
+(for example a feature with its tests, a refactor, dependency updates). Every changed file is in exactly one group; a small PR \
+can be one group. Give the groups in the order a reviewer should read them, and keep reading_order in that group order. \
+title is 2-5 words. summary is one plain-text sentence on what the group changes.\n\
 - comments: only what a careful human reviewer would post. Axis bug: real bugs, broken edge cases, security, data loss, \
 performance traps. Axis spec: a line where the code does not do what the description says. Axis standards: a line that breaks a rule \
 written in the repository standards files below. Keep the primary axis bug for a real bug, even when it also breaks a written rule. \
@@ -76,6 +80,14 @@ pub struct Comment {
 pub struct ReadingStep {
     pub file: String,
     pub reason: String,
+}
+
+/// Changed files that a reviewer can check together.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Group {
+    pub title: String,
+    pub summary: String,
+    pub files: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -141,6 +153,9 @@ pub struct Review {
     /// Files in the suggested reading order. Empty in reviews saved before it existed.
     #[serde(default)]
     pub reading_order: Vec<ReadingStep>,
+    /// Logical groups of the changed files, in reading order. Empty in reviews saved before they existed.
+    #[serde(default)]
+    pub groups: Vec<Group>,
     /// Commit the review is for; a newer head makes it outdated.
     #[serde(default)]
     pub head_sha: String,
@@ -167,6 +182,22 @@ pub fn sort_by_reading_order(indexes: &mut [usize], files: &[ProcessedFile], ord
     indexes.sort_by_key(|&i| order.iter().position(|s| s.file == files[i].filename).unwrap_or(order.len()));
 }
 
+/// Position in `groups` of the first group that names `path`. Files that no group names share one
+/// last group, at `groups.len()`.
+pub fn group_of(groups: &[Group], path: &str) -> usize {
+    groups.iter().position(|g| g.files.iter().any(|f| f == path)).unwrap_or(groups.len())
+}
+
+/// Title and summary of group `index`, as `group_of` gives it.
+pub fn group_text(groups: &[Group], index: usize) -> (&str, &str) {
+    groups.get(index).map_or(("Other changes", "Files that the AI review put in no group."), |g| (&g.title, &g.summary))
+}
+
+/// Sort file `indexes` so the files of each group are together, in group order. Stable: files keep their order in a group.
+pub fn sort_by_groups(indexes: &mut [usize], files: &[ProcessedFile], groups: &[Group]) {
+    indexes.sort_by_cached_key(|&i| group_of(groups, &files[i].filename));
+}
+
 /// Sort key: severity first, then axis.
 pub fn rank(c: &Comment) -> (usize, usize) {
     let severity = ["high", "medium", "low"].iter().position(|s| *s == c.severity).unwrap_or(3);
@@ -175,7 +206,7 @@ pub fn rank(c: &Comment) -> (usize, usize) {
 
 fn schema() -> Value {
     let text = |description: &str| json!({"type":"string","description":description});
-    json!({"type":"object","additionalProperties":false,"required":["summary","evidence","danger","spec","standards_check","reading_order","comments"],"properties":{
+    json!({"type":"object","additionalProperties":false,"required":["summary","evidence","danger","spec","standards_check","reading_order","groups","comments"],"properties":{
         "summary":text("Markdown"),
         "evidence":text("Markdown"),
         "danger":{"type":"object","additionalProperties":false,"required":["door","blast_radius","note"],"properties":{
@@ -188,6 +219,9 @@ fn schema() -> Value {
             "unchecked":text("Rules that need evidence outside the supplied diff, or none")}},
         "reading_order":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["file","reason"],"properties":{
             "file":{"type":"string"},"reason":text("Short phrase, under 10 words")}}},
+        "groups":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","summary","files"],"properties":{
+            "title":text("2-5 words"),"summary":text("One plain-text sentence, no Markdown"),
+            "files":{"type":"array","items":{"type":"string","description":"Path of a changed file"}}}}},
         "comments":{"type":"array","items":{"type":"object","additionalProperties":false,
             "required":["file","line","side","axis","severity","rule","body"],"properties":{
                 "file":{"type":"string"},
@@ -343,9 +377,9 @@ pub fn prompt(title: &str, body: &str, standards: &StandardsInput, files: &[Proc
             }
         }
     }
-    // Named, so reading_order can still place every changed file.
+    // Named, so reading_order and groups can still place every changed file.
     if !not_shown.is_empty() {
-        out.push_str("\n# Changed files without a diff above\n\nPut them in reading_order by path; do not comment on them.\n\n");
+        out.push_str("\n# Changed files without a diff above\n\nPut them in reading_order and groups by path; do not comment on them.\n\n");
         for name in not_shown {
             let _ = writeln!(out, "- {name}");
         }
@@ -446,6 +480,9 @@ pub async fn run(
     let output = agent::run(backend, model.as_deref(), effort.as_deref(), SYSTEM, &prompt, &schema(), TIMEOUT).await?;
     let mut review: Review = serde_json::from_value(output.value).map_err(|e| format!("Unexpected AI output: {e}"))?;
     review.comments.sort_by_key(rank);
+    // The file list shows one group after the other, so the step numbers must follow the groups.
+    let groups = &review.groups;
+    review.reading_order.sort_by_cached_key(|step| group_of(groups, &step.file));
     review.standards_status = standards.status().into();
     review.standards = standards.files.into_iter().map(|(path, _)| path).collect();
     review.head_sha = head_sha;
@@ -609,6 +646,32 @@ mod tests {
         let mut indexes = [0, 1, 2, 3];
         sort_by_reading_order(&mut indexes, &files, &[step("c.rs"), step("a.rs"), step("gone.rs")]);
         assert_eq!(indexes, [2, 0, 1, 3]);
+    }
+
+    #[test]
+    fn groups_keep_their_files_together_and_unnamed_files_go_last() {
+        let files = ["a.rs", "b.rs", "c.rs", "d.rs", "e.rs"].map(|name| file(name, "", "x\n"));
+        let group = |title: &str, files: &[&str]| Group { title: title.into(), summary: String::new(),
+            files: files.iter().map(|f| f.to_string()).collect() };
+        // `a.rs` is in two groups (the first one wins), `gone.rs` is not in the PR, `b.rs` is in no group.
+        let groups = [group("Core", &["d.rs", "a.rs"]), group("Callers", &["a.rs", "c.rs", "gone.rs"])];
+        let mut indexes = [0, 1, 2, 3, 4];
+        sort_by_groups(&mut indexes, &files, &groups);
+        assert_eq!(indexes, [0, 3, 2, 1, 4]);
+        assert_eq!(indexes.map(|i| group_of(&groups, &files[i].filename)), [0, 0, 1, 2, 2]);
+        assert_eq!(group_text(&groups, 1).0, "Callers");
+        assert_eq!(group_text(&groups, 2).0, "Other changes");
+        // Without groups every file is in group 0, so the order does not change.
+        let mut indexes = [4, 0, 2];
+        sort_by_groups(&mut indexes, &files, &[]);
+        assert_eq!(indexes, [4, 0, 2]);
+    }
+
+    #[test]
+    fn review_saved_before_groups_loads_without_them() {
+        let saved = json!({"summary":"s","evidence":"e","danger":{"door":"two-way","blast_radius":"local","note":"n"},
+            "spec":{"status":"matches","note":"n"},"standards_check":{"applicable":"a","passing":"p","unchecked":"u"},"comments":[]});
+        assert!(serde_json::from_value::<Review>(saved).unwrap().groups.is_empty());
     }
 
     #[test]

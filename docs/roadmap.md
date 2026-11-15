@@ -1,6 +1,6 @@
 # Revisor product roadmap
 
-Last updated: 2026-10-18
+Last updated: 2026-11-15
 
 ## Current focus
 
@@ -117,7 +117,7 @@ Start with source context and changed-file relationships. Do not require full re
 
 | ID | Task | Status | Completion evidence |
 |---|---|---|---|
-| R3-01 | Group related changes with a short behavior description and exact diff links | Not started | Acceptance evidence not recorded |
+| R3-01 | Group related changes with a short behavior description and exact diff links | In progress | 2026-11-15: the one-click AI review returns logical groups of whole files; the Files tab shows them and a click narrows the diff to one group or one file. Core tests and `cargo check -p revisor-app` pass. Running-app check and trial evidence are pending |
 | R3-02 | Suggest a reading order with reasons and links to relevant changed tests | Not started | Acceptance evidence not recorded |
 | R3-03 | Extend existing optional AI assistance; identify analyzed revisions, discard stale results, and list skipped files | Not started | Existing AI panels require task-specific verification |
 | R3-04 | One-click AI review: a recap of the change and suggested line comments from the installed Claude Code or Codex CLI | In progress | 2026-10-18: core tests pass; live CLI runs on a sample diff found both planted bugs (Claude Code 6 s, Codex 13 s). Running-app check and trial evidence are pending |
@@ -216,6 +216,7 @@ These are small-sample validation targets, not proof of market demand. Record th
 | 2026-10-18 | Add skill ideas to one-click AI review | Recap uses the [pr skill](https://github.com/mattpocock/skills/blob/main/skills/engineering/pr/SKILL.md) layout (summary, evidence, merge danger). Comments keep the [code-review skill](https://github.com/mattpocock/skills/blob/main/skills/engineering/code-review/SKILL.md) axes apart (bug, spec, standards). Spec is the PR description; standards files are read from the base commit so a PR cannot change its own rules. Fixed-point questions, issue tracker and sub-agents are not used. |
 | 2026-10-25 | License: FSL-1.1-MIT | Keeps the paid offer in R5-04 possible: no competing commercial copies, but people can read, use, and change the code. Each version becomes MIT after two years. See [SPDX FSL-1.1-MIT](https://spdx.org/licenses/FSL-1.1-MIT.html). |
 | 2026-10-25 | Code, releases, and updates on GitHub | One public place for trial users. Hosted runners are free for public repositories, so no own Mac runner is needed. Gitea stays as the `gitea` remote only. |
+| 2026-11-15 | AI groups whole files; a click on a group or a file shows only that selection in the diff | User decision. Groups come with the existing one-click review, so there is no new step. "Show all files" in the diff toolbar goes back to the full diff. |
 
 ## Progress log
 
@@ -226,5 +227,6 @@ These are small-sample validation targets, not proof of market demand. Record th
 | 2026-10-25 | R0-06 brand kit | Icon (a review comment on a diff line, Islands theme colors), 1024 PNG, social preview, README header and tagline "AI code review that lands on the diff". Icon added to the macOS bundle and the Fedora and Arch packages. | Publish on GitHub (R0-08). |
 | 2026-10-25 | R0-08 publish on GitHub | Public repository with topics; release workflow on GitHub Actions; update check reads GitHub releases. First release `v1.0.0` started from the tag. | Upload `brand/social-preview.png` in repository settings; then the clean install check (R0-01) from the GitHub release. |
 | 2026-10-26 | Release assets | Releases now build macOS universal, Windows x64 installer, Ubuntu/Debian .deb (amd64, arm64), Fedora RPM (x86_64, aarch64), and Arch packages. Every file has a minisign `.sig` and `SHA256SUMS`; the updater installs only signed packages. Release notes are grouped from commit subjects. Manual dry run passed on all 8 builds; all signatures verified with the app's key. | Tag the next version; install the Windows and .deb packages on real machines. |
+| 2026-11-15 | R3-01 change groups | The AI review prompt and schema return `groups` (title, one-sentence summary, files). The Files tab shows group headers with viewed counts; the Overview tab lists the groups. A click on a group or a file narrows the diff; the next-file keys move the narrowed diff. The sample review has four groups. `cargo test -p revisor-core -- ai_review demo files` passes (42 tests). No live CLI run and no running-app check yet. | Run the sample PR and one real PR in the app; make a live CLI run to check the new schema field. |
 
 When work is completed, append a dated row and update its task status, evidence, and Current focus. Do not replace earlier observations.

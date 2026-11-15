@@ -8,7 +8,7 @@ use revisor_core::provider::types::{
     Commit, IssueComment, PrReview, PullRequest, ReviewComment, ThreadResolutionInfo,
 };
 use revisor_core::provider::github::pr_load_error;
-use revisor_core::ai_review::{self, ReadingStep};
+use revisor_core::ai_review::{self, Group, ReadingStep};
 use revisor_core::{cache::queries, diff::search, files};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -25,6 +25,16 @@ pub enum CommitSelection {
 pub enum DiffMode {
     Split,
     Unified,
+}
+
+/// The part of the listed files that the diff shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Scope {
+    All,
+    /// The AI review group of the selected file.
+    Group,
+    /// The selected file.
+    File,
 }
 
 /// Where the diff view should scroll to.
@@ -81,7 +91,10 @@ pub struct PrModel {
     /// Files of the current commit selection.
     pub files: Vec<ProcessedFile>,
     /// Indexes into `files` that pass the sidebar filter, in display order.
+    pub listed: Vec<usize>,
+    /// The listed files that the diff shows: all of them, or the `scope` around the selected file.
     pub visible: Vec<usize>,
+    pub scope: Scope,
     all_files: Option<Vec<ProcessedFile>>,
     pub comments: Vec<ReviewComment>,
     pub issue_comments: Vec<IssueComment>,
@@ -106,8 +119,8 @@ pub struct PrModel {
     pub filter_query: String,
     pub include: String,
     pub exclude: String,
-    /// AI reading order and the head commit it was made for.
-    reading_order: (String, Vec<ReadingStep>),
+    /// AI reading order and groups, and the head commit they were made for.
+    review_map: (String, Vec<ReadingStep>, Vec<Group>),
     /// Show files in the AI reading order when it is for the PR head.
     pub ai_order: bool,
     pub search: Option<CodeSearch>,
@@ -145,7 +158,9 @@ impl PrModel {
             viewer,
             pr: None,
             files: vec![],
+            listed: vec![],
             visible: vec![],
+            scope: Scope::All,
             all_files: None,
             comments: vec![],
             issue_comments: vec![],
@@ -166,7 +181,7 @@ impl PrModel {
             filter_query: String::new(),
             include: String::new(),
             exclude: String::new(),
-            reading_order: (String::new(), vec![]),
+            review_map: (String::new(), vec![], vec![]),
             ai_order: true,
             search: None,
             history: vec![],
@@ -239,6 +254,9 @@ impl PrModel {
                             this.set_files(files, cx);
                             if let Some(path) = selected.filter(|path| this.files.iter().any(|file| &file.filename == path)) {
                                 this.selected = Some(path);
+                                if this.rescope() {
+                                    this.research();
+                                }
                             }
                             // Keep local expansion choices when the PR head did not change.
                             this.collapsed = collapsed.unwrap_or_else(|| {
@@ -263,30 +281,104 @@ impl PrModel {
         self.history.clear();
         self.diff_errors.clear();
         self.files = files;
+        self.selected = None;
+        // A narrowed scope selects its first listed file here.
         self.refilter(cx);
-        let first = self.visible.first().copied().unwrap_or(0);
-        self.selected = self.files.get(first).map(|f| f.filename.clone());
+        if self.selected.is_none() {
+            let first = self.listed.first().copied().unwrap_or(0);
+            self.selected = self.files.get(first).map(|f| f.filename.clone());
+        }
     }
 
     fn refilter(&mut self, cx: &mut Context<Self>) {
-        let mut visible = files::filter_files(&self.files, &self.filter_query, &self.include, &self.exclude);
+        let mut listed = files::filter_files(&self.files, &self.filter_query, &self.include, &self.exclude);
         if let Some(order) = self.reading_order() {
-            ai_review::sort_by_reading_order(&mut visible, &self.files, order);
+            ai_review::sort_by_reading_order(&mut listed, &self.files, order);
         }
-        self.visible = visible;
+        ai_review::sort_by_groups(&mut listed, &self.files, self.groups());
+        self.listed = listed;
+        // A narrowed diff follows the selection. When the filter hides the selected file, move to the first listed file.
+        let is_listed = |path: &str| self.listed.iter().any(|&i| self.files[i].filename == path);
+        if self.scope != Scope::All && !self.selected.as_deref().is_some_and(is_listed) {
+            self.selected = self.listed.first().map(|&i| self.files[i].filename.clone());
+        }
+        self.rescope();
         self.research();
         cx.notify();
     }
 
-    /// The AI reading order for the PR head, when there is one.
+    /// Set the files that the diff shows from the scope and the selection. `true` when they changed;
+    /// the caller then searches again.
+    fn rescope(&mut self) -> bool {
+        if self.scope == Scope::Group && self.groups().is_empty() {
+            self.scope = Scope::All;
+        }
+        let (selected, groups) = (self.selected.as_deref(), self.groups());
+        let group = selected.map(|path| ai_review::group_of(groups, path));
+        let shown = |i: &usize| {
+            let path = self.files[*i].filename.as_str();
+            match self.scope {
+                Scope::All => true,
+                Scope::Group => Some(ai_review::group_of(groups, path)) == group,
+                Scope::File => Some(path) == selected,
+            }
+        };
+        let mut visible: Vec<usize> = self.listed.iter().copied().filter(shown).collect();
+        if visible.is_empty() {
+            // The selected file is not listed (a filter hides it, or it is not in this commit selection).
+            visible = self.listed.clone();
+        }
+        let changed = visible != self.visible;
+        self.visible = visible;
+        changed
+    }
+
+    /// Show only `path` in the diff.
+    pub fn show_file(&mut self, path: &str, cx: &mut Context<Self>) {
+        self.scope = Scope::File;
+        self.select_file(path, cx);
+    }
+
+    /// Show only the files of AI review group `group` in the diff, from its first file.
+    pub fn show_group(&mut self, group: usize, cx: &mut Context<Self>) {
+        let groups = self.groups();
+        let mut paths = self.listed.iter().map(|&i| &self.files[i].filename);
+        let Some(path) = paths.find(|path| !groups.is_empty() && ai_review::group_of(groups, path) == group).cloned() else { return };
+        self.scope = Scope::Group;
+        self.select_file(&path, cx);
+    }
+
+    /// Show every listed file again, at the selected one.
+    pub fn show_all(&mut self, cx: &mut Context<Self>) {
+        self.scope = Scope::All;
+        self.rescope();
+        self.research();
+        if let Some(path) = self.selected.clone() {
+            cx.emit(PrEvent::ScrollTo(ScrollTarget::File(path)));
+        }
+        cx.notify();
+    }
+
+    /// The group that the diff shows, when the scope is one group.
+    pub fn shown_group(&self) -> Option<usize> {
+        let path = self.selected.as_deref().filter(|_| self.scope == Scope::Group)?;
+        Some(ai_review::group_of(self.groups(), path))
+    }
+
+    /// The AI reading order or groups for the PR head, when there are any.
     pub fn has_reading_order(&self) -> bool {
-        let (head, order) = &self.reading_order;
-        !order.is_empty() && self.pr.as_ref().is_some_and(|pr| pr.head_sha == *head)
+        let (head, order, groups) = &self.review_map;
+        !(order.is_empty() && groups.is_empty()) && self.pr.as_ref().is_some_and(|pr| pr.head_sha == *head)
     }
 
     /// The reading order the files are shown in, if any.
     pub fn reading_order(&self) -> Option<&[ReadingStep]> {
-        (self.ai_order && self.has_reading_order()).then_some(&self.reading_order.1)
+        (self.ai_order && self.has_reading_order()).then_some(&self.review_map.1)
+    }
+
+    /// The AI review groups the files are shown in. Empty when there are none or the AI order is off.
+    pub fn groups(&self) -> &[Group] {
+        if self.ai_order && self.has_reading_order() { &self.review_map.2 } else { &[] }
     }
 
     /// Step number and reason of `path` in the shown reading order.
@@ -295,8 +387,8 @@ impl PrModel {
         Some((i + 1, &step.reason))
     }
 
-    pub fn set_reading_order(&mut self, head: String, order: Vec<ReadingStep>, cx: &mut Context<Self>) {
-        self.reading_order = (head, order);
+    pub fn set_review_map(&mut self, head: String, order: Vec<ReadingStep>, groups: Vec<Group>, cx: &mut Context<Self>) {
+        self.review_map = (head, order, groups);
         self.reorder(cx);
     }
 
@@ -313,9 +405,14 @@ impl PrModel {
         }
     }
 
-    /// The `i`-th visible file.
+    /// The `i`-th file that the diff shows.
     pub fn visible_file(&self, i: usize) -> &ProcessedFile {
         &self.files[self.visible[i]]
+    }
+
+    /// The `i`-th file of the sidebar list.
+    pub fn listed_file(&self, i: usize) -> &ProcessedFile {
+        &self.files[self.listed[i]]
     }
 
     pub fn set_filter(&mut self, query: String, include: String, exclude: String, cx: &mut Context<Self>) {
@@ -389,7 +486,7 @@ impl PrModel {
     /// Clear sidebar filters, open the target's file and scroll to it.
     pub fn reveal(&mut self, path: &str, target: ScrollTarget, cx: &mut Context<Self>) {
         // Open first: its jump event must reach the diff before the refilter rebuilds the rows.
-        let hidden = !self.visible.iter().any(|&i| self.files[i].filename == path);
+        let hidden = !self.listed.iter().any(|&i| self.files[i].filename == path);
         self.open(path, target.clone(), cx);
         if hidden {
             self.set_filter(String::new(), String::new(), String::new(), cx);
@@ -398,11 +495,15 @@ impl PrModel {
         }
     }
 
-    /// Select and expand `path`, then scroll to `target` in it.
+    /// Select and expand `path`, then scroll to `target` in it. A narrowed scope moves to `path`.
     pub fn open(&mut self, path: &str, target: ScrollTarget, cx: &mut Context<Self>) {
         self.selected = Some(path.to_string());
         self.collapsed.remove(path);
+        // Before the notify: the diff records its position on the rows it still has.
         cx.emit(PrEvent::JumpTo(target));
+        if self.rescope() {
+            self.research();
+        }
         cx.notify();
     }
 
@@ -421,11 +522,14 @@ impl PrModel {
     pub fn go_back(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(spot) = self.history.pop() else { return false };
         let path = spot.path.clone();
-        if !self.visible.iter().any(|&i| self.files[i].filename == path) {
+        if !self.listed.iter().any(|&i| self.files[i].filename == path) {
             self.set_filter(String::new(), String::new(), String::new(), cx);
         }
         self.selected = Some(path.clone());
         self.collapsed.remove(&path);
+        if self.rescope() {
+            self.research();
+        }
         cx.emit(PrEvent::ScrollTo(ScrollTarget::Spot(spot)));
         cx.notify();
         true
@@ -439,27 +543,27 @@ impl PrModel {
         }
     }
 
-    /// Position of the selected file in `visible`.
-    fn selected_visible(&self) -> Option<usize> {
+    /// Position of the selected file in `listed`.
+    fn selected_listed(&self) -> Option<usize> {
         let path = self.selected.as_ref()?;
-        self.visible.iter().position(|&i| &self.files[i].filename == path)
+        self.listed.iter().position(|&i| &self.files[i].filename == path)
     }
 
-    /// Step to the previous (-1) or next (1) visible file.
+    /// Step to the previous (-1) or next (1) listed file. A narrowed scope moves with it.
     pub fn navigate_file(&mut self, direction: isize, cx: &mut Context<Self>) {
-        let current = self.selected_visible();
-        if let Some(next) = files::navigate_file(self.visible.len(), current, direction) {
-            let path = self.visible_file(next).filename.clone();
+        let current = self.selected_listed();
+        if let Some(next) = files::navigate_file(self.listed.len(), current, direction) {
+            let path = self.listed_file(next).filename.clone();
             self.select_file(&path, cx);
         }
     }
 
-    /// Step to the next or previous visible file not marked viewed.
+    /// Step to the next or previous listed file not marked viewed.
     pub fn navigate_unreviewed(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let current = self.selected_visible();
-        let unreviewed = |i: usize| !self.reviewed.contains(&self.visible_file(i).filename);
-        if let Some(next) = files::find_wrapping(self.visible.len(), current, forward, unreviewed) {
-            let path = self.visible_file(next).filename.clone();
+        let current = self.selected_listed();
+        let unreviewed = |i: usize| !self.reviewed.contains(&self.listed_file(i).filename);
+        if let Some(next) = files::find_wrapping(self.listed.len(), current, forward, unreviewed) {
+            let path = self.listed_file(next).filename.clone();
             self.select_file(&path, cx);
         }
     }

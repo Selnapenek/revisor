@@ -1,4 +1,5 @@
-//! Files tab: review focus and a filterable file list.
+//! Files tab: review focus and a filterable file list, in AI review groups when there are any.
+//! A click on a group or a file shows only that selection in the diff.
 
 use super::state::{CommitSelection, PrEvent, PrModel, ScrollTarget};
 use crate::{backend, theme};
@@ -11,6 +12,7 @@ use gpui_kit::component::{
     *,
 };
 use gpui_kit::{prelude::*, *};
+use revisor_core::ai_review::{group_of, group_text};
 use revisor_core::cache::queries;
 use revisor_core::files::{build_file_tree, related_files, review_progress, visible_rows, Relation, Row, RowKind};
 use revisor_core::focus::{self, FocusResult};
@@ -144,21 +146,48 @@ impl FilesPanel {
 
     fn rebuild_rows(&mut self, cx: &App) {
         let m = self.model.read(cx);
-        let paths = m.visible.iter().map(|&i| m.files[i].filename.as_str());
-        self.rows = if self.tree {
-            // ponytail: in reading order a dir can show more than once; its rows collapse together.
-            visible_rows(&build_file_tree(paths, m.reading_order().is_some()), &self.collapsed_dirs)
-        } else {
-            paths
-                .enumerate()
-                .map(|(index, path)| Row {
+        let groups = m.groups();
+        let paths: Vec<&str> = m.listed.iter().map(|&i| m.files[i].filename.as_str()).collect();
+        let mut rows = Vec::new();
+        // The model sorts the files by group, so each run of one group is a section. Without groups
+        // all files are one section with no header.
+        let mut start = 0;
+        for section in paths.chunk_by(|a, b| group_of(groups, a) == group_of(groups, b)) {
+            if !groups.is_empty() {
+                let group = group_of(groups, section[0]);
+                let reviewed = section.iter().filter(|path| m.reviewed.contains(**path)).count();
+                rows.push(Row {
                     depth: 0,
-                    name: path.rsplit('/').next().unwrap_or(path).to_string(),
-                    path: path.to_string(),
-                    kind: RowKind::File { index },
-                })
-                .collect()
-        };
+                    name: group_text(groups, group).0.to_string(),
+                    path: String::new(),
+                    kind: RowKind::Group { group, files: section.len(), reviewed },
+                });
+            }
+            let mut files = if self.tree {
+                // ponytail: in reading order a dir can show more than once; its rows collapse together.
+                visible_rows(&build_file_tree(section.iter().copied(), m.reading_order().is_some()), &self.collapsed_dirs)
+            } else {
+                section
+                    .iter()
+                    .enumerate()
+                    .map(|(index, path)| Row {
+                        depth: 0,
+                        name: path.rsplit('/').next().unwrap_or(path).to_string(),
+                        path: path.to_string(),
+                        kind: RowKind::File { index },
+                    })
+                    .collect()
+            };
+            // File indexes count from the section start; make them positions in `listed`.
+            for row in &mut files {
+                if let RowKind::File { index } = &mut row.kind {
+                    *index += start;
+                }
+            }
+            rows.extend(files);
+            start += section.len();
+        }
+        self.rows = rows;
         self.reveal_selected(cx);
     }
 
@@ -214,8 +243,24 @@ impl FilesPanel {
                         .child(div().flex_1().min_w_0().truncate().font_medium().child(row.name.clone()))
                         .child(div().text_color(theme.muted_foreground).child(files.to_string()))
                     }
+                    RowKind::Group { group, files, reviewed } => {
+                        let shown = m.shown_group() == Some(group);
+                        return el
+                            .when(shown, |el| el.bg(theme.list_active))
+                            .child(theme::margin_mark(theme.primary).when(!shown, |el| el.invisible().group_hover(ROW_GROUP, |s| s.visible())))
+                            .on_click(cx.listener(move |this, _, _, cx| this.model.update(cx, |m, cx| m.show_group(group, cx))))
+                            .child(div().flex_shrink_0().font_family(theme.mono_font_family.clone()).text_color(theme.primary).child(format!("{}", group + 1)))
+                            .child(div().flex_1().min_w_0().truncate().font_semibold().child(row.name.clone()))
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .font_family(theme.mono_font_family.clone())
+                                    .text_color(theme.muted_foreground)
+                                    .child(format!("{reviewed}/{files}")),
+                            )
+                    }
                 };
-                let file = m.visible_file(index);
+                let file = m.listed_file(index);
                 let reviewed = m.reviewed.contains(&file.filename);
                 let (letter, color) = theme::file_status(&file.status, cx);
                 let dir = (!self.tree).then(|| row.path.rsplit_once('/').map(|(d, _)| format!("{d}/"))).flatten();
@@ -227,7 +272,7 @@ impl FilesPanel {
                             .when(!selected, |el| el.invisible().group_hover(ROW_GROUP, |s| s.visible())),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.model.update(cx, |m, cx| m.select_file(&path, cx));
+                        this.model.update(cx, |m, cx| m.show_file(&path, cx));
                     }))
                     .child(
                         // Ticking "viewed" must not also select the row.
@@ -309,9 +354,9 @@ impl Render for FilesPanel {
                                 .xsmall()
                                 .map(|b| if ai_order { b.outline().icon(IconName::Check).label("AI order") } else { b.ghost().label("Diff order") })
                                 .tooltip(if ai_order {
-                                    "Files follow the AI reading order. Click for diff order."
+                                    "Files follow the AI groups and reading order. Click for diff order."
                                 } else {
-                                    "Files follow the diff order. Click for the AI reading order."
+                                    "Files follow the diff order. Click for the AI groups and reading order."
                                 })
                                 .on_click(cx.listener(|this, _, _, cx| this.model.update(cx, |m, cx| m.toggle_ai_order(cx)))),
                         )

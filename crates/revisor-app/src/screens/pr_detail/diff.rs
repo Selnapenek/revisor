@@ -2,7 +2,7 @@
 
 use super::code_text::CodeText;
 use super::comments::{save_comment, save_with, CommentForm, CommentFormEvent, ThreadView};
-use super::state::{CommitSelection, DiffMode, PrEvent, PrModel, ScrollTarget, Spot};
+use super::state::{CommitSelection, DiffMode, PrEvent, PrModel, Scope, ScrollTarget, Spot};
 use super::syntax::FileSyntax;
 use crate::{backend, theme};
 use gpui_kit::component::{
@@ -1092,7 +1092,23 @@ impl DiffView {
             .border_b_1()
             .border_color(theme.border)
             .when(!model.commits.is_empty(), |el| el.child(super::commits::CommitSelector::new(self.model.clone())))
-            .child(theme::eyebrow(format!("{} files", model.visible.len()), cx))
+            .child(theme::eyebrow(
+                match model.scope {
+                    Scope::All => format!("{} files", model.visible.len()),
+                    _ => format!("{} of {} files", model.visible.len(), model.listed.len()),
+                },
+                cx,
+            ))
+            .when(model.scope != Scope::All, |el| {
+                el.child(
+                    Button::new("show-all")
+                        .outline()
+                        .xsmall()
+                        .label("Show all files")
+                        .tooltip("The diff shows only the group or file you selected. Click to show every file.")
+                        .on_click(cx.listener(|this, _, _, cx| this.model.update(cx, |m, cx| m.show_all(cx)))),
+                )
+            })
             .child(
                 h_flex()
                     .gap_1()
@@ -1114,7 +1130,13 @@ impl DiffView {
                     ),
             )
             .when(model.files_loading, |el| el.child(Spinner::new().xsmall()))
-            .child(div().flex_1())
+            // The space between the two button sets names the group on screen.
+            .child(div().flex_1().min_w_0().truncate().text_xs().text_color(theme.muted_foreground).children(model.shown_group().map(
+                |group| {
+                    let (title, summary) = revisor_core::ai_review::group_text(model.groups(), group);
+                    format!("{}. {title} — {summary}", group + 1)
+                },
+            )))
             .children(model.history.last().map(|spot| {
                 let place = match spot.line {
                     Some((_, line)) => format!("{}:{line}", spot.path),

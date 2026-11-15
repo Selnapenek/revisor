@@ -16,6 +16,7 @@ Revisor puts the AI review, the diff, and your GitHub review in one window. You 
 | You copy AI findings from a terminal to GitHub by hand | Each finding is on its code line. Click **Add comment** to make it a draft comment, or **Dismiss** to drop it. |
 | A bot floods the PR with comments that nobody approved | Nothing goes to GitHub until you post it. You can edit each comment first. |
 | You open a large PR and do not know where to start | Read the recap first: summary, evidence, and merge danger. Then at most 10 comments, the most severe first. |
+| One PR mixes many changes, and the file list does not show which files go together | The AI puts the changed files into logical groups. Click a group or a file to see only that part of the diff. |
 | Each AI review tool wants a new account, API key, and bill | Revisor runs the Claude Code or Codex CLI that you already have. No Revisor account. |
 | The GitHub page is slow on large diffs, and you lose your place | A native app with keyboard navigation. Large diffs load on demand, and viewed files stay marked. |
 

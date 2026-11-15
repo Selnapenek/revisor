@@ -92,6 +92,7 @@ pub async fn replay_review(number: u64, head_sha: String) -> Review {
             standards_status: String::new(),
             comments: vec![],
             reading_order: vec![],
+            groups: vec![],
             head_sha: String::new(),
             backend: String::new(),
             standards: vec![],
@@ -767,6 +768,13 @@ mod tests {
         }
         let named: HashSet<_> = review.reading_order.iter().map(|s| s.file.as_str()).collect();
         assert!(files.iter().all(|f| named.contains(f.filename.as_str())), "reading order misses a file");
+        // Each file is in one group, and the reading order goes group by group.
+        for f in &files {
+            let count = review.groups.iter().filter(|g| g.files.contains(&f.filename)).count();
+            assert_eq!(count, 1, "{} is in {count} groups", f.filename);
+        }
+        let step_groups: Vec<_> = review.reading_order.iter().map(|s| ai_review::group_of(&review.groups, &s.file)).collect();
+        assert!(step_groups.is_sorted(), "reading order does not follow the groups");
 
         let comments = p.get_pr_comments(OWNER, REPO, PR).await.unwrap();
         let resolutions = p.get_thread_resolutions(OWNER, REPO, PR).await.unwrap();
