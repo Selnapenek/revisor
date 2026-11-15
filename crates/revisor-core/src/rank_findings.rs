@@ -3,6 +3,7 @@ use crate::provider::types::{PullRequest, ReviewComment, ThreadResolutionInfo};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::Duration;
 use tokio::task::JoinSet;
 
@@ -395,6 +396,16 @@ pub fn select_findings(
     findings
 }
 
+/// Hash of what `select_findings` picks. A ranking stays valid while this does not change, so
+/// comments that are not findings (other authors, the viewer's own review) do not make it stale.
+pub fn findings_key(comments: &[ReviewComment], resolutions: &[ThreadResolutionInfo], authors: &[String]) -> u64 {
+    let mut h = DefaultHasher::new();
+    for f in select_findings(comments, resolutions, authors) {
+        (f.id, f.path, f.line, f.body, f.replies).hash(&mut h);
+    }
+    h.finish()
+}
+
 /// Threads by `authors` that `select_findings` leaves out (resolved, outdated, empty, file-level).
 pub fn count_excluded_findings(
     comments: &[ReviewComment],
@@ -748,6 +759,25 @@ mod tests {
             file_level,
         ];
         assert_eq!(count_excluded_findings(&comments, &resolved, &authors), 3);
+    }
+
+    #[test]
+    fn findings_key_ignores_comments_that_are_not_findings() {
+        let authors = ["bot".to_string()];
+        let key = |comments: &[ReviewComment]| findings_key(comments, &[], &authors);
+        // The viewer's pending comment, then the same comment after the review is submitted.
+        let pending = comment(2, "human");
+        let mut submitted = pending.clone();
+        submitted.updated_at = "later".into();
+        let before = key(&[comment(1, "bot"), pending]);
+        assert_eq!(before, key(&[comment(1, "bot"), submitted, comment(3, "human")]));
+
+        let mut edited = comment(1, "bot");
+        edited.body = "other".into();
+        assert_ne!(before, key(&[edited]));
+        let mut reply = comment(4, "human");
+        reply.in_reply_to_id = Some(1);
+        assert_ne!(before, key(&[comment(1, "bot"), reply]));
     }
 
     #[test]

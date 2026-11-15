@@ -74,12 +74,7 @@ fn ranking_context(m: &PrModel, authors: &[String]) -> u64 {
     for f in &m.files {
         (&f.filename, &f.sha, &f.status).hash(&mut h);
     }
-    for c in &m.comments {
-        (c.id, &c.body, &c.updated_at, c.outdated).hash(&mut h);
-    }
-    for t in &m.threads {
-        (t.root.id, t.is_resolved).hash(&mut h);
-    }
+    rf::findings_key(&m.comments, m.resolutions(), authors).hash(&mut h);
     h.finish()
 }
 
