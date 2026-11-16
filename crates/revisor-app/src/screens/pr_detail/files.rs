@@ -6,6 +6,7 @@ use crate::{backend, theme};
 use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
+    tooltip::Tooltip,
     input::{Escape, Input, InputEvent, InputState},
     progress::Progress,
     scroll::ScrollableElement as _,
@@ -162,6 +163,10 @@ impl FilesPanel {
                     path: String::new(),
                     kind: RowKind::Group { group, files: section.len(), reviewed },
                 });
+                let summary = group_text(groups, group).1;
+                if !summary.is_empty() {
+                    rows.push(Row { depth: 0, name: summary.to_string(), path: String::new(), kind: RowKind::GroupSummary { group } });
+                }
             }
             let mut files = if self.tree {
                 // ponytail: in reading order a dir can show more than once; its rows collapse together.
@@ -243,12 +248,23 @@ impl FilesPanel {
                         .child(div().flex_1().min_w_0().truncate().font_medium().child(row.name.clone()))
                         .child(div().text_color(theme.muted_foreground).child(files.to_string()))
                     }
-                    RowKind::Group { group, files, reviewed } => {
+                    RowKind::Group { group, .. } | RowKind::GroupSummary { group } => {
                         let shown = m.shown_group() == Some(group);
-                        return el
+                        let el = el
                             .when(shown, |el| el.bg(theme.list_active))
                             .child(theme::margin_mark(theme.primary).when(!shown, |el| el.invisible().group_hover(ROW_GROUP, |s| s.visible())))
-                            .on_click(cx.listener(move |this, _, _, cx| this.model.update(cx, |m, cx| m.show_group(group, cx))))
+                            .on_click(cx.listener(move |this, _, _, cx| this.model.update(cx, |m, cx| m.show_group(group, cx))));
+                        let RowKind::Group { files, reviewed, .. } = row.kind else {
+                            // One line; the tooltip has the full text when the sidebar is narrow.
+                            let summary = SharedString::from(row.name.clone());
+                            return el
+                                .tooltip({
+                                    let summary = summary.clone();
+                                    move |window, cx| Tooltip::new(summary.clone()).build(window, cx)
+                                })
+                                .child(div().flex_1().min_w_0().truncate().text_color(theme.muted_foreground).child(summary));
+                        };
+                        return el
                             .child(div().flex_shrink_0().font_family(theme.mono_font_family.clone()).text_color(theme.primary).child(format!("{}", group + 1)))
                             .child(div().flex_1().min_w_0().truncate().font_semibold().child(row.name.clone()))
                             .child(

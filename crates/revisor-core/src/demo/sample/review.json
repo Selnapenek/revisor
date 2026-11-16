@@ -31,17 +31,17 @@
   "groups": [
     {
       "title": "Money helpers",
-      "summary": "The money helpers move to src/lib with a new percentOf, and the deprecated legacy rounding helpers are deleted.",
+      "summary": "Money helpers move to src/lib; legacy rounding is deleted.",
       "files": ["src/lib/money.ts", "src/legacy/priceUtils.ts"]
     },
     {
       "title": "Coupon rules",
-      "summary": "A new module finds a coupon by its code, ignores expired coupons and calculates the discount in cents.",
+      "summary": "Finds a coupon, ignores expired ones, calculates the discount.",
       "files": ["src/coupons.ts", "tests/coupons.test.ts"]
     },
     {
       "title": "Discount at checkout",
-      "summary": "Checkout passes the coupon code to the cart, and the cart subtracts the discount before it adds tax.",
+      "summary": "The cart subtracts the coupon discount before it adds tax.",
       "files": ["src/cart.ts", "tests/cart.test.ts", "src/checkout.ts"]
     },
     {

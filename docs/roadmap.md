@@ -1,6 +1,6 @@
 # Revisor product roadmap
 
-Last updated: 2026-11-15
+Last updated: 2026-11-16
 
 ## Current focus
 
@@ -228,5 +228,6 @@ These are small-sample validation targets, not proof of market demand. Record th
 | 2026-10-25 | R0-08 publish on GitHub | Public repository with topics; release workflow on GitHub Actions; update check reads GitHub releases. First release `v1.0.0` started from the tag. | Upload `brand/social-preview.png` in repository settings; then the clean install check (R0-01) from the GitHub release. |
 | 2026-10-26 | Release assets | Releases now build macOS universal, Windows x64 installer, Ubuntu/Debian .deb (amd64, arm64), Fedora RPM (x86_64, aarch64), and Arch packages. Every file has a minisign `.sig` and `SHA256SUMS`; the updater installs only signed packages. Release notes are grouped from commit subjects. Manual dry run passed on all 8 builds; all signatures verified with the app's key. | Tag the next version; install the Windows and .deb packages on real machines. |
 | 2026-11-15 | R3-01 change groups | The AI review prompt and schema return `groups` (title, one-sentence summary, files). The Files tab shows group headers with viewed counts; the Overview tab lists the groups. A click on a group or a file narrows the diff; the next-file keys move the narrowed diff. The sample review has four groups. `cargo test -p revisor-core -- ai_review demo files` passes (42 tests). No live CLI run and no running-app check yet. | Run the sample PR and one real PR in the app; make a live CLI run to check the new schema field. |
+| 2026-11-16 | R3-01 group descriptions | Each group header in the Files tab has a one-line description under it; a tooltip shows the full text. The prompt asks for at most 12 words. `cargo test -p revisor-core -- ai_review demo files` passes (42 tests); `cargo check -p revisor-app` passes. No running-app check yet. | Check the row width with real group descriptions in the app. |
 
 When work is completed, append a dated row and update its task status, evidence, and Current focus. Do not replace earlier observations.

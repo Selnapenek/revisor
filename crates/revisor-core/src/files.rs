@@ -200,6 +200,8 @@ pub enum RowKind {
     /// Header of AI review group `group` (`ai_review::group_of`), with its file and viewed counts.
     /// The Files tab adds these rows; `visible_rows` does not.
     Group { group: usize, files: usize, reviewed: usize },
+    /// The short description of group `group`, under its header.
+    GroupSummary { group: usize },
 }
 
 /// One line of the tree view, for a virtual list.

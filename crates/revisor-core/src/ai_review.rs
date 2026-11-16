@@ -45,7 +45,7 @@ what to look for in that file.\n\
 - groups: put the changed files into logical groups. One group is one behavior or purpose that a reviewer can check on its own \
 (for example a feature with its tests, a refactor, dependency updates). Every changed file is in exactly one group; a small PR \
 can be one group. Give the groups in the order a reviewer should read them, and keep reading_order in that group order. \
-title is 2-5 words. summary is one plain-text sentence on what the group changes.\n\
+title is 2-5 words. summary is a short plain-text description of what the group changes, at most 12 words, so it fits on one line.\n\
 - comments: only what a careful human reviewer would post. Axis bug: real bugs, broken edge cases, security, data loss, \
 performance traps. Axis spec: a line where the code does not do what the description says. Axis standards: a line that breaks a rule \
 written in the repository standards files below. Keep the primary axis bug for a real bug, even when it also breaks a written rule. \
@@ -220,7 +220,7 @@ fn schema() -> Value {
         "reading_order":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["file","reason"],"properties":{
             "file":{"type":"string"},"reason":text("Short phrase, under 10 words")}}},
         "groups":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["title","summary","files"],"properties":{
-            "title":text("2-5 words"),"summary":text("One plain-text sentence, no Markdown"),
+            "title":text("2-5 words"),"summary":text("Plain text, at most 12 words, no Markdown"),
             "files":{"type":"array","items":{"type":"string","description":"Path of a changed file"}}}}},
         "comments":{"type":"array","items":{"type":"object","additionalProperties":false,
             "required":["file","line","side","axis","severity","rule","body"],"properties":{
