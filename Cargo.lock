@@ -5782,7 +5782,7 @@ dependencies = [
 
 [[package]]
 name = "revisor-app"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "base64",
  "core-foundation 0.10.1",
@@ -5802,7 +5802,7 @@ dependencies = [
 
 [[package]]
 name = "revisor-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "async-trait",
